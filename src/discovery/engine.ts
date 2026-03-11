@@ -4,9 +4,10 @@
  * The beating heart of `aegis init`. Just a conversation loop.
  *
  * When Aegis needs to think, the shield animation keeps the human
- * company — diamonds filling in, the .agentpolicy/ tree assembling. When policy gets extracted,
- * the same animations keep the human company. The experience is:
- * they talked to someone with real presence, and then files appeared.
+ * company — diamonds filling in, the .agentpolicy/ tree assembling.
+ * When policy gets extracted, the same animations keep the human
+ * company. The experience is: they talked to someone with real
+ * presence, and then files appeared.
  */
 
 import type { LLMProvider, Message } from "../llm/provider.js";
@@ -16,6 +17,7 @@ import {
   buildExtractionSystemPrompt,
 } from "./system-prompt.js";
 import type { TerminalUI } from "../ui/terminal.js";
+import { loadMemory, upsertMemory, saveMemory } from "../memory/store.js";
 
 export interface DiscoveryResult {
   /** The full conversation transcript */
@@ -92,6 +94,10 @@ export class DiscoveryEngine {
         // Extract policy — thinking animation keeps the human company
         // while Aegis compiles everything behind the scenes.
         const policy = await this.extractPolicy();
+
+        // Save conversation memory for next time — runs quietly
+        // alongside extraction, no additional wait for the human.
+        await this.saveConversationMemory();
 
         return {
           transcript: [...this.messages],
@@ -205,5 +211,87 @@ export class DiscoveryEngine {
     this.ui.stopThinking();
 
     return policy;
+  }
+
+  /**
+   * Extract key takeaways from the conversation and save them as memory.
+   *
+   * This runs after extraction, quietly. It gives Aegis a lightweight
+   * "personal notebook" about the human — communication preferences,
+   * key decisions, things that came up during discovery — so the next
+   * session starts with context instead of a blank slate.
+   *
+   * Memory is scoped to the project name so different projects maintain
+   * separate context. Entries are key-value pairs that Aegis can reference
+   * naturally in future conversations.
+   *
+   * If this fails for any reason, it fails silently — memory is a nice-to-have,
+   * not a blocker. The policy files are the real deliverable.
+   */
+  private async saveConversationMemory(): Promise<void> {
+    try {
+      const transcriptSummary = this.messages
+        .map((m) => `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`)
+        .join("\n\n");
+
+      const memoryPrompt = `You are Aegis, reviewing a discovery conversation you just had. Extract key things worth remembering about this person and this session for future conversations.
+
+Focus on:
+- Communication style and preferences (e.g. direct, detailed, casual, wants explanations)
+- Key decisions that were debated or where the human had strong opinions
+- Technical preferences or patterns they care about
+- Anything they explicitly asked you to remember or that would make the next session smoother
+- Their role and relationship to the project (solo dev, team lead, PM, etc.)
+
+Do NOT include:
+- Anything already captured in the policy files (that's the repo's job, not memory's)
+- Generic observations that would apply to anyone
+- Anything sensitive (credentials, personal data)
+
+Respond with a JSON array of objects, each with a "key" (short label) and "value" (concise note). Keep it to 3-8 entries. Only include things that would genuinely help in a future conversation.
+
+Example format:
+[
+  { "key": "communication_style", "value": "Direct and fast-paced. Prefers concrete recommendations over open-ended questions." },
+  { "key": "role", "value": "Solo developer using AI agents as engineering team. Thinks of himself as PM, not engineer." },
+  { "key": "strong_preference", "value": "Wants agents to comment step-by-step tutorials in PRs when they can't touch something directly." }
+]
+
+Respond ONLY with the JSON array. No explanation, no markdown.`;
+
+      const memoryMessages: Message[] = [
+        {
+          role: "user",
+          content: `Here is the conversation transcript:\n\n${transcriptSummary}`,
+        },
+      ];
+
+      const entries = await this.provider.chatJSON<
+        Array<{ key: string; value: string }>
+      >(memoryMessages, memoryPrompt);
+
+      // Validate we got a usable array back
+      if (!Array.isArray(entries) || entries.length === 0) return;
+
+      // Load current memory, upsert each entry, save
+      let store = loadMemory();
+      const projectName = this.scan.projectName;
+
+      for (const entry of entries) {
+        if (
+          entry.key &&
+          entry.value &&
+          typeof entry.key === "string" &&
+          typeof entry.value === "string"
+        ) {
+          store = upsertMemory(store, entry.key, entry.value, projectName);
+        }
+      }
+
+      saveMemory(store);
+    } catch {
+      // Memory is best-effort. If extraction fails, the policy files
+      // are still the primary deliverable. Fail silently.
+    }
   }
 }
