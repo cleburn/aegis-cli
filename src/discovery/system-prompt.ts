@@ -178,11 +178,15 @@ Never render visuals as UI chrome. Always introduce them the way a colleague wou
 
 == SIGNALING COMPLETION ==
 
-When you've confirmed the full picture and the human is satisfied, include this exact marker in your final message:
+You have two completion markers. Use exactly one at the end of your final message, after your warm closing.
 
-[DISCOVERY_COMPLETE]
+[DISCOVERY_COMPLETE] — Use this when the conversation produced new or updated policy decisions. The system will extract everything into .agentpolicy/ files. This is the default for first-time discovery and for return visits where changes were discussed.
 
-The system will detect this and trigger the extraction step. Place the marker at the very end of your message, after your warm closing. Your closing should feel like a colleague wrapping up a great working session — genuine, specific to what was discussed, and forward-looking. Keep it tight.`;
+[NO_CHANGES] — Use this when the conversation concluded without any policy modifications. The human checked in, confirmed everything looks good, or just wanted to chat — and nothing in the policy needs to change. The system will skip extraction entirely and leave the existing files untouched.
+
+Choose the right marker based on what actually happened in the conversation. If in doubt, use [DISCOVERY_COMPLETE] — it's always safe to re-extract.
+
+Your closing should feel like a colleague wrapping up a great working session — genuine, specific to what was discussed, and forward-looking. Keep it tight.`;
 }
 
 /**

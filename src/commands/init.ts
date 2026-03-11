@@ -5,7 +5,7 @@
  * with the human, and produces the .agentpolicy/ directory.
  *
  * First-time: Logo wordmark → conversation → files appear.
- * Return visit: Short opener → conversation → files updated.
+ * Return visit: Short opener → conversation → files updated (or unchanged).
  *
  * The scan happens quietly before the first message. The policy
  * gets written quietly after the last one. In between, it's
@@ -67,11 +67,12 @@ export async function initCommand(): Promise<void> {
 
     const result = await engine.run();
 
-    // Write policy quietly
-    const files = writePolicy(cwd, result.policy);
-
-    // Show what was created — minimal, Aegis already said the warm goodbye
-    ui.showFilesCreated(files);
+    // Write policy if changes were made — skip if conversation
+    // concluded with no modifications needed
+    if (result.policy) {
+      const files = writePolicy(cwd, result.policy);
+      ui.showFilesCreated(files);
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes("SIGINT")) {
       console.log("\n");
