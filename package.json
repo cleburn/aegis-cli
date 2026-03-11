@@ -30,9 +30,9 @@
   "author": "Cleburn Walker",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cleburn/aegis"
+    "url": "https://github.com/cleburn/aegis-cli"
   },
-  "homepage": "https://github.com/cleburn/aegis",
+  "homepage": "https://github.com/cleburn/aegis-cli",
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
