@@ -72,6 +72,7 @@ export async function initCommand(): Promise<void> {
     if (result.policy) {
       const files = writePolicy(cwd, result.policy);
       ui.showFilesCreated(files);
+      ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
     }
   } catch (error) {
     if (error instanceof Error && error.message.includes("SIGINT")) {
