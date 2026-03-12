@@ -10,6 +10,7 @@
 
 import React, { useState, useEffect } from "react";
 import { render, Box, Text, Static, useInput } from "ink";
+import stringWidth from "string-width";
 import chalk from "chalk";
 import {
   AEGIS_LOGO,
@@ -205,6 +206,9 @@ function StreamingResponse({ text }: { text: string }) {
 
 // ── Input Prompt Component ─────────────────────────────────────────
 
+const INPUT_PREFIX_WIDTH = stringWidth("  ▎ you    ");
+const CURSOR_CHAR = "█";
+
 function InputPrompt({
   bridge,
 }: {
@@ -212,31 +216,41 @@ function InputPrompt({
 }) {
   const [inputText, setInputText] = useState("");
 
-  useInput(
-    (input, key) => {
-      if (key.return) {
-        const value = inputText;
-        setInputText("");
-        bridge.setInputPromptActive(false);
-        if (bridge.resolveInput) {
-          bridge.resolveInput(value);
-          bridge.resolveInput = null;
-        }
-      } else if (key.backspace || key.delete) {
-        setInputText((t) => t.slice(0, -1));
-      } else if (!key.ctrl && !key.meta && input) {
-        setInputText((t) => t + input);
+  useInput((input, key) => {
+    if (key.return) {
+      const value = inputText;
+      setInputText("");
+      bridge.setInputPromptActive(false);
+      if (bridge.resolveInput) {
+        bridge.resolveInput(value);
+        bridge.resolveInput = null;
       }
-    },
-  );
+    } else if (key.backspace || key.delete) {
+      setInputText((t) => t.slice(0, -1));
+    } else if (!key.ctrl && !key.meta && input) {
+      setInputText((t) => t + input);
+    }
+  });
+
+  // Available width for input text + cursor, keeping everything on one line
+  const cols = process.stdout.columns || 80;
+  const availableWidth = cols - INPUT_PREFIX_WIDTH - stringWidth(CURSOR_CHAR);
+  const textWidth = stringWidth(inputText);
+  // If text exceeds available space, show only the tail end
+  const visibleText =
+    textWidth <= availableWidth
+      ? inputText
+      : inputText.slice(inputText.length - availableWidth);
 
   return (
     <Box paddingLeft={2}>
       <Text color="#A8D8A8">▎ </Text>
       <Text color="#A8D8A8">you  </Text>
       <Text>{"  "}</Text>
-      <Text dimColor>{inputText}</Text>
-      <Text color="#5B8DEF">█</Text>
+      <Box overflow="hidden" width={availableWidth + stringWidth(CURSOR_CHAR)}>
+        <Text>{visibleText}</Text>
+        <Text color="#5B8DEF">{CURSOR_CHAR}</Text>
+      </Box>
     </Box>
   );
 }
@@ -455,9 +469,14 @@ export class TerminalUI {
     this.bridge.addToHistory({ type: "error", message });
   }
 
-  destroy(): void {
+  async destroy(): Promise<void> {
     this.stopThinking();
-    this.inkInstance?.unmount();
+    if (this.inkInstance) {
+      // Let Ink flush the final React render cycle (e.g. showFilesCreated/showNote
+      // items added to <Static>) before tearing down the component tree.
+      await sleep(50);
+      this.inkInstance.unmount();
+    }
   }
 }
 

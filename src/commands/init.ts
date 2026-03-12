@@ -85,6 +85,6 @@ export async function initCommand(): Promise<void> {
     );
     process.exit(1);
   } finally {
-    ui.destroy();
+    await ui.destroy();
   }
 }
