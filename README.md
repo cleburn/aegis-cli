@@ -32,9 +32,6 @@ aegis explain
 
 # Validate policy files against the schema
 aegis validate
-
-# See what Aegis remembers about you
-aegis memory
 ```
 
 ## How `aegis init` Works
