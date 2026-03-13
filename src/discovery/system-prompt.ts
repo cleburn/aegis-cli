@@ -50,6 +50,8 @@ export interface DiscoveryTargets {
   roles: boolean;
   /** Escalation rules — ambiguity, conflict, scope boundary */
   escalation: boolean;
+  /** Required repo artifacts — README, LICENSE, CONTRIBUTING, etc. */
+  requiredArtifacts: boolean;
 }
 
 /**
@@ -116,6 +118,7 @@ You need to gather enough to produce these files:
   - Languages, frameworks, infrastructure, package managers, key libraries
   - Guiding principles (non-negotiable values, prioritized)
   - Build commands: install, build, test, lint, typecheck, dev, plus custom
+  - Required artifacts: files that must exist in the repo (README.md, LICENSE, CONTRIBUTING.md, etc.) with their purpose and where content should be derived from. Every project needs at minimum a README. Ask what documentation and licensing the project needs, and note where each file's content should come from (e.g. "derived from charter and constitution" or "standard MIT license text").
 
 **governance.json** — The rules every agent follows
   - Autonomy level per domain. Standard domains include: code_modification, dependency_management, file_creation, file_deletion, configuration_changes, infrastructure_changes, agent_recruitment, test_modification, documentation, refactoring. These are starting points — if the project involves areas that need their own governance (e.g. patient_data_access for healthcare, financial_transactions for fintech, pii_handling for projects with personal data, deployment for production releases), create project-specific domains. The schema accepts any domain string. Let the project's needs dictate the domains, not this list.  - File permissions: writable paths, read-only paths, forbidden paths
@@ -274,6 +277,7 @@ RULES:
 5. Conventions must be specific and actionable. Vague conventions are useless to agents.
 6. Multi-agent → specialist role files. Single-agent → only default.json.
 7. Ledger starts empty with write protocol configured.
+8. Required artifacts must include at minimum README.md. Include any other repo-level files discussed (LICENSE, CONTRIBUTING.md, etc.) with purpose and source derivation.
 
 OUTPUT FORMAT:
 
