@@ -14,6 +14,7 @@ import stringWidth from "string-width";
 import chalk from "chalk";
 import {
   AEGIS_LOGO,
+  SHIELD_ASSEMBLY_FRAMES,
   SHIELD_PULSE_FRAMES,
   THINKING_ANIMATIONS,
 } from "./art.js";
@@ -44,6 +45,7 @@ interface AppBridge {
   setStreamBuffer: (text: string) => void;
   setIsStreaming: (v: boolean) => void;
   setIsThinking: (v: boolean) => void;
+  setThinkingMode: (mode: "thinking" | "extraction") => void;
   setInputPromptActive: (v: boolean) => void;
   resolveInput: ((value: string) => void) | null;
 }
@@ -148,9 +150,10 @@ function UserTurn({ message }: { message: string }) {
 
 // ── Thinking Animation Component ───────────────────────────────────
 
-function ThinkingDisplay() {
+function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extraction" }) {
   const [frameIndex, setFrameIndex] = useState(0);
   const [animation] = useState(() => {
+    if (mode === "extraction") return SHIELD_ASSEMBLY_FRAMES;
     const cols = process.stdout.columns || 80;
     const animations =
       cols < MIN_WIDTH_FOR_ASSEMBLY
@@ -262,6 +265,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
   const [streamBuffer, setStreamBuffer] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
+  const [thinkingMode, setThinkingMode] = useState<"thinking" | "extraction">("thinking");
   const [inputActive, setInputActive] = useState(false);
 
   // Expose state setters to the bridge
@@ -270,6 +274,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
     bridge.setStreamBuffer = setStreamBuffer;
     bridge.setIsStreaming = setIsStreaming;
     bridge.setIsThinking = setIsThinking;
+    bridge.setThinkingMode = setThinkingMode;
     bridge.setInputPromptActive = setInputActive;
   }, []);
 
@@ -342,7 +347,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
       )}
 
       {/* Dynamic region — thinking animation */}
-      {isThinking && <ThinkingDisplay />}
+      {isThinking && <ThinkingDisplay mode={thinkingMode} />}
 
       {/* Dynamic region — input prompt */}
       {inputActive && <InputPrompt bridge={bridge} />}
@@ -364,6 +369,7 @@ export class TerminalUI {
       setStreamBuffer: () => {},
       setIsStreaming: () => {},
       setIsThinking: () => {},
+      setThinkingMode: () => {},
       setInputPromptActive: () => {},
       resolveInput: null,
     };
@@ -435,7 +441,8 @@ export class TerminalUI {
 
   // ── Thinking ─────────────────────────────────────────────────────
 
-  startThinking(): void {
+  startThinking(mode: "thinking" | "extraction" = "thinking"): void {
+    this.bridge.setThinkingMode(mode);
     this._thinkingTimer = setTimeout(() => {
       this._thinkingTimer = null;
       this.bridge.setIsThinking(true);

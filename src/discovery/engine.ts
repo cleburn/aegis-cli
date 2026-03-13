@@ -198,7 +198,7 @@ export class DiscoveryEngine {
    */
   private async extractPolicy(): Promise<DiscoveryResult["policy"]> {
     // Extraction is always slow — start thinking animation immediately
-    this.ui.startThinking();
+    this.ui.startThinking("extraction");
 
     const extractionPrompt = buildExtractionSystemPrompt();
 
