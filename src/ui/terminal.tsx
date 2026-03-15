@@ -481,7 +481,7 @@ export class TerminalUI {
     if (this.inkInstance) {
       // Let Ink flush the final React render cycle (e.g. showFilesCreated/showNote
       // items added to <Static>) before tearing down the component tree.
-      await sleep(50);
+      await sleep(500);
       this.inkInstance.unmount();
     }
   }
