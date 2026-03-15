@@ -44,6 +44,12 @@ export const AEGIS_LOGO_HEIGHT = AEGIS_LOGO.split("\n").length;
  * actively building the policy. 12 frames, loops cleanly.
  *
  * Each frame is 14 lines tall (THINKING_FRAME_HEIGHT).
+ *
+ * ALIGNMENT NOTE: The file tree starts at column 18 (the \u251C
+ * of the first child). All child \u2502 pipes must also start at
+ * column 18 to stay vertically aligned. The shield's bottom
+ * half (\u2572 \u2571) is narrower, so those lines need extra leading
+ * spaces to keep the tree aligned.
  */
 export const SHIELD_ASSEMBLY_FRAMES: string[] = [
   // Frame 1 — shield appears, empty
@@ -145,8 +151,8 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u25C6  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u25C7 \u25C7 \u25C7  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                    ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json          ",
-    "   \u2572       \u2571     \u2502   \u2514\u2500\u2500 frontend.json         ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json          ",
+    "   \u2572       \u2571      \u2502   \u2514\u2500\u2500 frontend.json         ",
     "    \u2572     \u2571                                     ",
     "     \u2572   \u2571                                      ",
     "      \u2572 \u2571                                       ",
@@ -163,10 +169,10 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u25C6  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u25C6 \u25C7 \u25C7  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                    ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
-    "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json          ",
-    "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json          ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
+    "   \u2572       \u2571      \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
+    "    \u2572     \u2571       \u2502   \u251C\u2500\u2500 backend.json          ",
+    "     \u2572   \u2571        \u2502   \u2514\u2500\u2500 testing.json          ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
     "                                                ",
@@ -181,16 +187,16 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u2713  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u25C6 \u25C7 \u25C7  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                \u2713 ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
-    "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
-    "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
+    "   \u2572       \u2571      \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
+    "    \u2572     \u2571       \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
+    "     \u2572   \u2571        \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
     "       V                                        ",
     "                                                ",
   ].join("\n"),
 
-  // Frame 9 — ledger building
+  // Frame 9 — ledger and overrides building
   [
     "       \u25B3                                        ",
     "      \u2571 \u2572                                       ",
@@ -199,10 +205,10 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u2713  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u2713 \u25C6 \u25C7  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                \u2713 ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
-    "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
-    "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
+    "   \u2572       \u2571      \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
+    "    \u2572     \u2571       \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
+    "     \u2572   \u2571        \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
     "       V              \u251C\u2500\u2500 ledger.json          ",
     "                      \u2514\u2500\u2500 overrides.jsonl      ",
@@ -217,10 +223,10 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u2713  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u2713 \u2713 \u25C6  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                \u2713 ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
-    "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
-    "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
+    "   \u2572       \u2571      \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
+    "    \u2572     \u2571       \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
+    "     \u2572   \u2571        \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
     "       V              \u251C\u2500\u2500 ledger.json    \u2713     ",
     "                      \u2514\u2500\u2500 overrides.jsonl \u2713     ",
@@ -235,10 +241,10 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u2713  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u2713 \u2713 \u2713  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                \u2713 ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
-    "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
-    "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
+    "   \u2572       \u2571      \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
+    "    \u2572     \u2571       \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
+    "     \u2572   \u2571        \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                \u2713 ",
     "       V              \u251C\u2500\u2500 ledger.json    \u2713     ",
     "                      \u2514\u2500\u2500 overrides.jsonl \u2713     ",
@@ -253,10 +259,10 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2571  \u2713 \u2713  \u2572      \u251C\u2500\u2500 constitution.json  \u2713     ",
     "  \u2571  \u2713 \u2713 \u2713  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                \u2713 ",
-    "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
-    "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
-    "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
+    "  \u2572         \u2571     \u2502   \u251C\u2500\u2500 default.json    \u2713     ",
+    "   \u2572       \u2571      \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
+    "    \u2572     \u2571       \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
+    "     \u2572   \u2571        \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                \u2713 ",
     "       V              \u251C\u2500\u2500 ledger.json    \u2713     ",
     "                      \u2514\u2500\u2500 overrides.jsonl \u2713     ",

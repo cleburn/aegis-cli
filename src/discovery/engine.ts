@@ -199,50 +199,70 @@ export class DiscoveryEngine {
    * On return visits, the existing policy contents are passed to the
    * extraction prompt as a baseline — the LLM applies the conversation's
    * changes on top of what already exists.
+   *
+   * Retries once on failure — large JSON outputs occasionally hit
+   * token limits or produce syntax errors on the first attempt.
    */
   private async extractPolicy(): Promise<DiscoveryResult["policy"]> {
-    // Extraction is always slow — start thinking animation immediately
-    this.ui.startThinking("extraction");
+    const MAX_ATTEMPTS = 2;
 
-    // Build the existing policy baseline for return visits
-    const existingBaseline = this.buildExistingPolicyBaseline();
-    const extractionPrompt = buildExtractionSystemPrompt(existingBaseline);
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Start or restart the extraction animation
+      this.ui.startThinking("extraction");
 
-    const transcriptSummary = this.messages
-      .map((m) => `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`)
-      .join("\n\n");
+      // Build the existing policy baseline for return visits
+      const existingBaseline = this.buildExistingPolicyBaseline();
+      const extractionPrompt = buildExtractionSystemPrompt(existingBaseline);
 
-    const extractionMessages: Message[] = [
-      {
-        role: "user",
-        content: `Here is the complete discovery conversation transcript. Compile it into the .agentpolicy/ JSON files.\n\n${transcriptSummary}`,
-      },
-    ];
+      const transcriptSummary = this.messages
+        .map((m) => `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`)
+        .join("\n\n");
 
-    try {
-      const policy = await this.provider.chatJSON<NonNullable<DiscoveryResult["policy"]>>(
-        extractionMessages,
-        extractionPrompt
-      );
+      const extractionMessages: Message[] = [
+        {
+          role: "user",
+          content: `Here is the complete discovery conversation transcript. Compile it into the .agentpolicy/ JSON files.\n\n${transcriptSummary}`,
+        },
+      ];
 
-      this.ui.stopThinking();
+      try {
+        const policy = await this.provider.chatJSON<NonNullable<DiscoveryResult["policy"]>>(
+          extractionMessages,
+          extractionPrompt
+        );
 
-      // Validate the extraction produced the expected shape
-      if (!policy || !policy.constitution || !policy.governance || !policy.roles || !policy.ledger) {
+        this.ui.stopThinking();
+
+        // Validate the extraction produced the expected shape
+        if (!policy || !policy.constitution || !policy.governance || !policy.roles || !policy.ledger) {
+          if (attempt < MAX_ATTEMPTS) {
+            this.ui.stopThinking();
+            this.ui.showNote("Extraction came back incomplete — retrying...");
+            continue;
+          }
+          this.ui.showError(
+            "Extraction produced an incomplete result. Run aegis init again — sometimes the model needs a second pass."
+          );
+          return null;
+        }
+
+        return policy;
+      } catch (error) {
+        this.ui.stopThinking();
+
+        if (attempt < MAX_ATTEMPTS) {
+          this.ui.showNote("Extraction hit a snag — retrying...");
+          continue;
+        }
+
         this.ui.showError(
-          "Extraction produced an incomplete result. Run aegis init again — sometimes the model needs a second pass."
+          `Policy extraction failed: ${error instanceof Error ? error.message : "Unknown error"}. Run aegis init again.`
         );
         return null;
       }
-
-      return policy;
-    } catch (error) {
-      this.ui.stopThinking();
-      this.ui.showError(
-        `Policy extraction failed: ${error instanceof Error ? error.message : "Unknown error"}. Run aegis init again.`
-      );
-      return null;
     }
+
+    return null;
   }
 
   /**

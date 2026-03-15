@@ -3,6 +3,7 @@ import type { LLMProvider, Message } from "./provider.js";
 
 const MODEL = "claude-opus-4-6";
 const MAX_TOKENS = 8192;
+const MAX_TOKENS_JSON = 16384;
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "Anthropic";
@@ -12,10 +13,14 @@ export class AnthropicProvider implements LLMProvider {
     this.client = new Anthropic({ apiKey });
   }
 
-  async chat(messages: Message[], systemPrompt: string): Promise<string> {
+  async chat(
+    messages: Message[],
+    systemPrompt: string,
+    maxTokens: number = MAX_TOKENS
+  ): Promise<string> {
     const response = await this.client.messages.create({
       model: MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: maxTokens,
       system: systemPrompt,
       messages: messages.map((m) => ({
         role: m.role,
@@ -69,7 +74,7 @@ export class AnthropicProvider implements LLMProvider {
   ): Promise<T> {
     const jsonSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation — just the JSON object.`;
 
-    const raw = await this.chat(messages, jsonSystemPrompt);
+    const raw = await this.chat(messages, jsonSystemPrompt, MAX_TOKENS_JSON);
 
     // Strip any markdown fences if the model wraps anyway
     const cleaned = raw
