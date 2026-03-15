@@ -126,6 +126,7 @@ You need to gather enough to produce these files:
   - Coding conventions: component style, state management, error handling, naming, imports, testing patterns, architecture patterns — each with scope, enforcement level, and rationale
   - Quality gate: must_pass_tests, must_pass_lint, must_pass_typecheck, must_add_tests, must_update_docs, max_files_changed, custom checks
   - Escalation: what happens on ambiguity, on conflict between rules, on scope boundary
+  - Override protocol: what happens when a human instructs an agent to violate a policy. The default is warn_confirm_and_log — the agent identifies the violated policy, presents it to the human, requires explicit confirmation, and logs the override to an append-only file. Ask whether any policies should be designated as immutable — meaning they cannot be overridden even with human confirmation, and instead require the human to formally modify the governance through aegis init. For regulated industries (healthcare, fintech, government, defense), recommend that compliance-critical policies be marked immutable.
 
 **roles/*.json** — Job descriptions for agents
   - At minimum: default.json (catch-all for single-agent workflows)
@@ -278,6 +279,7 @@ RULES:
 6. Multi-agent → specialist role files. Single-agent → only default.json.
 7. Ledger starts empty with write protocol configured.
 8. Required artifacts must include at minimum README.md. Include any other repo-level files discussed (LICENSE, CONTRIBUTING.md, etc.) with purpose and source derivation.
+9. Override protocol defaults to warn_confirm_and_log unless the human specified otherwise. If the human identified any policies as absolutely non-negotiable or referenced regulatory requirements that cannot be bypassed, list those policy IDs in immutable_policies.
 
 OUTPUT FORMAT:
 
