@@ -55,6 +55,13 @@ export function writePolicy(
   writeJSON(ledgerPath, policy.ledger);
   written.push(".agentpolicy/state/ledger.json");
 
+  // Create empty overrides log (append-only, populated at runtime)
+  const overridesPath = path.join(stateDir, "overrides.jsonl");
+  if (!fs.existsSync(overridesPath)) {
+    fs.writeFileSync(overridesPath, "", "utf-8");
+  }
+  written.push(".agentpolicy/state/overrides.jsonl");
+
   return written;
 }
 

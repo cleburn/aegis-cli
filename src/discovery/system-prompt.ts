@@ -268,18 +268,134 @@ This demonstrates judgment. You're not just vacuuming up everything you can see.
 export function buildExtractionSystemPrompt(): string {
   return `You are Aegis, compiling a discovery conversation into .agentpolicy/ JSON files.
 
-You will receive the full transcript. Extract everything policy-relevant and produce valid JSON that conforms to the Aegis schemas.
+You will receive the full transcript. Extract everything policy-relevant and produce valid JSON.
 
-RULES:
-1. Every populated field must come from something the human said, confirmed, or that the scan detected.
-2. Where the human didn't express a preference, use sensible defaults informed by project context.
-3. Principles ordered by priority (1 = highest) based on how the human emphasized them.
-4. Autonomy levels reflect the trust level expressed. Default to "advisory" when unclear.
-5. Conventions must be specific and actionable. Vague conventions are useless to agents.
-6. Multi-agent → specialist role files. Single-agent → only default.json.
-7. Ledger starts empty with write protocol configured.
-8. Required artifacts must include at minimum README.md. Include any other repo-level files discussed (LICENSE, CONTRIBUTING.md, etc.) with purpose and source derivation.
-9. Override protocol defaults to warn_confirm_and_log unless the human specified otherwise. If the human identified any policies as absolutely non-negotiable or referenced regulatory requirements that cannot be bypassed, list those policy IDs in immutable_policies.
+== SCHEMA CONTRACT ==
+
+The Aegis spec defines required skeleton fields that every tool in the ecosystem relies on. You MUST use these exact field names for the skeleton. You MAY add additional fields beyond the skeleton to capture domain-specific governance that emerged from the conversation — sensitivity tiers, cross-domain rules, forbidden actions, data policies, validation responsibilities, or anything else the project needs. The skeleton is the floor, not the ceiling.
+
+== CONSTITUTION SKELETON ==
+
+{
+  "$schema": "https://aegis.dev/schema/constitution.v0.1.0.json",
+  "version": "0.1.0",
+  "project": {
+    "name": "string (required)",
+    "purpose": "string, 1-3 sentences (required)",
+    "architecture": "monolith|monorepo|multi_repo|microservices|serverless|hybrid (required)",
+    "module_map": [{ "path": "string", "purpose": "string", "owner": "role-name" }],
+    "required_artifacts": [{ "path": "string", "purpose": "string", "source": "string" }]
+    // Additional project fields permitted (e.g. domains, sensitivity_tiers)
+  },
+  "tech_stack": {
+    "languages": ["string"] // required
+    // frameworks, infrastructure, package_managers, key_libraries
+  },
+  "principles": [{
+    "name": "string (required)",
+    "statement": "string (required)",
+    "priority": 1
+    // Additional fields permitted (e.g. enforcement)
+  }],
+  "build_commands": { "install": "", "build": "", "test": "", "lint": "", "typecheck": "", "dev": "" }
+  // Additional top-level fields permitted (e.g. sensitivity_tiers)
+}
+
+== GOVERNANCE SKELETON ==
+
+{
+  "$schema": "https://aegis.dev/schema/governance.v0.1.0.json",
+  "version": "0.1.0",
+  "autonomy": {
+    "default_level": "conservative|advisory|delegated (required)",
+    "domains": { "domain_name": "conservative|advisory|delegated" }
+    // Additional autonomy fields permitted (e.g. levels, domain_overrides)
+  },
+  "permissions": {
+    "boundaries": {
+      "writable": ["glob patterns"],
+      "read_only": ["glob patterns"],
+      "forbidden": ["glob patterns"]
+    },
+    "sensitive_patterns": [{ "pattern": "string", "reason": "string" }]
+  },
+  "quality_gate": {
+    "pre_commit": {
+      "must_pass_tests": true,
+      "must_pass_lint": true,
+      "must_pass_typecheck": false,
+      "must_add_tests": false,
+      "must_update_docs": false
+    }
+    // Additional quality gate fields permitted (e.g. gates[], override_authority)
+  },
+  "conventions": [{ "id": "string", "scope": "string", "rule": "string", "enforcement": "strict|preferred|suggestion" }],
+  "escalation": {
+    "on_ambiguity": "stop_and_ask|best_judgment_and_flag|best_judgment_silent",
+    "on_conflict": "stop_and_ask|principles_win|convention_wins",
+    "on_scope_boundary": "stop_and_ask|flag_and_suggest|stay_in_lane"
+    // Additional escalation fields permitted (e.g. triggers, target, behavior)
+  },
+  "override_protocol": {
+    "behavior": "block_and_log|warn_confirm_and_log|log_only",
+    "log_path": ".agentpolicy/state/overrides.jsonl",
+    "immutable_policies": ["principle-ids that cannot be overridden"]
+  }
+  // Additional top-level fields permitted (e.g. cross_domain_rules, data_directory_policy)
+}
+
+== ROLE SKELETON ==
+
+{
+  "$schema": "https://aegis.dev/schema/role.v0.1.0.json",
+  "version": "0.1.0",
+  "role": {
+    "name": "string (required)",
+    "purpose": "string (required)"
+  },
+  "scope": {
+    "primary_paths": ["paths this role owns"] // required
+    // secondary_paths, excluded_paths
+  }
+  // Additional fields permitted (e.g. autonomy_overrides, forbidden_actions, conventions, escalation_triggers, validation_responsibilities, write_mode, report_format, collaboration)
+}
+
+== LEDGER SKELETON ==
+
+{
+  "$schema": "https://aegis.dev/schema/ledger.v0.1.0.json",
+  "version": "0.1.0",
+  "sequence": 0,
+  "tasks": [],
+  "write_protocol": {
+    "lock_file": ".agentpolicy/state/ledger.lock",
+    "lock_timeout_seconds": 120,
+    "retry_interval_ms": 500,
+    "max_retries": 10,
+    "procedure": [
+      { "step": 1, "action": "Read current ledger and note sequence number" },
+      { "step": 2, "action": "Attempt to create lock file. If exists and not stale, wait and retry" },
+      { "step": 3, "action": "Re-read ledger. If sequence changed, release lock and restart" },
+      { "step": 4, "action": "Write changes, increment sequence" },
+      { "step": 5, "action": "Release lock file" }
+    ]
+  }
+}
+
+== RULES ==
+
+1. Every populated skeleton field must use the exact field name shown above.
+2. Every populated field must come from something the human said, confirmed, or that the scan detected.
+3. Where the human didn't express a preference, use sensible defaults informed by project context.
+4. Beyond the skeleton, add any domain-specific fields the conversation surfaced — sensitivity tiers, cross-domain rules, forbidden actions, data policies, QA validation responsibilities, etc. The schemas permit additional properties. Use them.
+5. Principles ordered by priority (1 = highest) based on how the human emphasized them.
+6. Autonomy levels use the three-level enum: conservative, advisory, delegated. Map the human's language to these. "Let them run" = delegated. "Stop and ask" = conservative. Default to advisory when unclear.
+7. Conventions must be specific and actionable. Vague conventions are useless to agents.
+8. Multi-agent → specialist role files. Single-agent → only default.json.
+9. Ledger starts empty with write protocol configured.
+10. Required artifacts must include at minimum README.md.
+11. Override protocol defaults to warn_confirm_and_log. If the human identified policies as absolutely non-negotiable or referenced regulatory requirements, list those in immutable_policies.
+12. Build commands belong in constitution, not governance.
 
 OUTPUT FORMAT:
 
@@ -290,12 +406,12 @@ Respond with a single JSON object:
   "governance": { ... },
   "roles": {
     "default": { ... },
-    "frontend": { ... }
+    "specialist_name": { ... }
   },
   "ledger": { ... }
 }
 
-Every file includes "$schema" reference and "version": "0.1.0". All must validate against the Aegis schemas. No markdown, no explanation — just the JSON.`;
+No markdown, no explanation — just the JSON.`;
 }
 
 function formatMemoryForPrompt(memory: Record<string, unknown>): string {
