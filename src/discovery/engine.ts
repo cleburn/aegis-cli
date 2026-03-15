@@ -195,12 +195,18 @@ export class DiscoveryEngine {
    * After discovery, compile the conversation into structured policy.
    * Thinking animation runs during extraction since this is always
    * a long operation — no 2-second threshold needed.
+   *
+   * On return visits, the existing policy contents are passed to the
+   * extraction prompt as a baseline — the LLM applies the conversation's
+   * changes on top of what already exists.
    */
   private async extractPolicy(): Promise<DiscoveryResult["policy"]> {
     // Extraction is always slow — start thinking animation immediately
     this.ui.startThinking("extraction");
 
-    const extractionPrompt = buildExtractionSystemPrompt();
+    // Build the existing policy baseline for return visits
+    const existingBaseline = this.buildExistingPolicyBaseline();
+    const extractionPrompt = buildExtractionSystemPrompt(existingBaseline);
 
     const transcriptSummary = this.messages
       .map((m) => `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`)
@@ -213,13 +219,49 @@ export class DiscoveryEngine {
       },
     ];
 
-    const policy = await this.provider.chatJSON<NonNullable<DiscoveryResult["policy"]>>(
-      extractionMessages,
-      extractionPrompt
-    );
+    try {
+      const policy = await this.provider.chatJSON<NonNullable<DiscoveryResult["policy"]>>(
+        extractionMessages,
+        extractionPrompt
+      );
 
-    this.ui.stopThinking();
+      this.ui.stopThinking();
 
-    return policy;
+      // Validate the extraction produced the expected shape
+      if (!policy || !policy.constitution || !policy.governance || !policy.roles || !policy.ledger) {
+        this.ui.showError(
+          "Extraction produced an incomplete result. Run aegis init again — sometimes the model needs a second pass."
+        );
+        return null;
+      }
+
+      return policy;
+    } catch (error) {
+      this.ui.stopThinking();
+      this.ui.showError(
+        `Policy extraction failed: ${error instanceof Error ? error.message : "Unknown error"}. Run aegis init again.`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Format existing policy file contents as a baseline string
+   * for the extraction prompt. Returns undefined if no existing
+   * policy exists (first-time init).
+   */
+  private buildExistingPolicyBaseline(): string | undefined {
+    if (!this.scan.hasExistingPolicy || this.scan.existingPolicyContents.length === 0) {
+      return undefined;
+    }
+
+    const sections: string[] = [];
+    for (const file of this.scan.existingPolicyContents) {
+      sections.push(`--- ${file.path} ---`);
+      sections.push(file.content);
+      sections.push("");
+    }
+
+    return sections.join("\n");
   }
 }

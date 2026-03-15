@@ -42,6 +42,8 @@ export const AEGIS_LOGO_HEIGHT = AEGIS_LOGO.split("\n").length;
  *
  * The animation cycles through states showing Aegis
  * actively building the policy. 12 frames, loops cleanly.
+ *
+ * Each frame is 14 lines tall (THINKING_FRAME_HEIGHT).
  */
 export const SHIELD_ASSEMBLY_FRAMES: string[] = [
   // Frame 1 — shield appears, empty
@@ -59,6 +61,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571       ",
     "      \u2572 \u2571        ",
     "       V         ",
+    "                  ",
   ].join("\n"),
 
   // Frame 2 — scanning begins
@@ -76,6 +79,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571                                      ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 3 — first item building
@@ -93,6 +97,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571                                      ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 4 — constitution done, governance building
@@ -110,6 +115,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571                                      ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 5 — governance done, roles appearing
@@ -127,6 +133,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571                                      ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 6 — roles expanding
@@ -139,11 +146,12 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "  \u2571  \u25C7 \u25C7 \u25C7  \u2572     \u251C\u2500\u2500 governance.json    \u2713     ",
     " \u2571\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2572    \u251C\u2500\u2500 roles/                    ",
     "  \u2572         \u2571    \u2502   \u251C\u2500\u2500 default.json          ",
-    "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json         ",
+    "   \u2572       \u2571     \u2502   \u2514\u2500\u2500 frontend.json         ",
     "    \u2572     \u2571                                     ",
     "     \u2572   \u2571                                      ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 7 — more roles
@@ -161,6 +169,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json          ",
     "      \u2572 \u2571                                       ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 8 — roles complete, state appearing
@@ -178,6 +187,7 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
     "       V                                        ",
+    "                                                ",
   ].join("\n"),
 
   // Frame 9 — ledger building
@@ -194,7 +204,8 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
     "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
-    "       V              \u2514\u2500\u2500 ledger.json          ",
+    "       V              \u251C\u2500\u2500 ledger.json          ",
+    "                      \u2514\u2500\u2500 overrides.jsonl      ",
   ].join("\n"),
 
   // Frame 10 — almost done
@@ -211,7 +222,8 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
     "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
     "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
-    "       V              \u2514\u2500\u2500 ledger.json    \u2713     ",
+    "       V              \u251C\u2500\u2500 ledger.json    \u2713     ",
+    "                      \u2514\u2500\u2500 overrides.jsonl \u2713     ",
   ].join("\n"),
 
   // Frame 11 — all checkmarks, validating
@@ -227,8 +239,9 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
     "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
     "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
-    "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
-    "       V              \u2514\u2500\u2500 ledger.json    \u2713     ",
+    "      \u2572 \u2571        \u2514\u2500\u2500 state/                \u2713 ",
+    "       V              \u251C\u2500\u2500 ledger.json    \u2713     ",
+    "                      \u2514\u2500\u2500 overrides.jsonl \u2713     ",
   ].join("\n"),
 
   // Frame 12 — complete, clean
@@ -244,8 +257,9 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
     "   \u2572       \u2571     \u2502   \u251C\u2500\u2500 frontend.json   \u2713     ",
     "    \u2572     \u2571      \u2502   \u251C\u2500\u2500 backend.json    \u2713     ",
     "     \u2572   \u2571       \u2502   \u2514\u2500\u2500 testing.json    \u2713     ",
-    "      \u2572 \u2571        \u2514\u2500\u2500 state/                    ",
-    "       V              \u2514\u2500\u2500 ledger.json    \u2713     ",
+    "      \u2572 \u2571        \u2514\u2500\u2500 state/                \u2713 ",
+    "       V              \u251C\u2500\u2500 ledger.json    \u2713     ",
+    "                      \u2514\u2500\u2500 overrides.jsonl \u2713     ",
   ].join("\n"),
 ];
 
@@ -255,6 +269,8 @@ export const SHIELD_ASSEMBLY_FRAMES: string[] = [
  * A lighter animation for shorter waits or subsequent thinking pauses.
  * The shield breathes — diamonds cycle through states suggesting
  * ongoing work without the full assembly sequence.
+ *
+ * Each frame is 14 lines tall (THINKING_FRAME_HEIGHT).
  */
 export const SHIELD_PULSE_FRAMES: string[] = [
   [
@@ -271,6 +287,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   [
@@ -287,6 +304,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   [
@@ -303,6 +321,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   [
@@ -319,6 +338,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   [
@@ -335,6 +355,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   [
@@ -351,6 +372,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   [
@@ -367,6 +389,7 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 
   // Reset back to empty for loop
@@ -384,13 +407,14 @@ export const SHIELD_PULSE_FRAMES: string[] = [
     "     \u2572   \u2571",
     "      \u2572 \u2571",
     "       V  ",
+    "          ",
   ].join("\n"),
 ];
 
 // ── Utilities ──────────────────────────────────────────────────────────
 
 /** Consistent frame height for thinking animations (for cursor math) */
-export const THINKING_FRAME_HEIGHT = 13;
+export const THINKING_FRAME_HEIGHT = 14;
 
 /** All thinking animations, for random selection */
 export const THINKING_ANIMATIONS = [

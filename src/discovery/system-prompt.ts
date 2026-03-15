@@ -186,9 +186,9 @@ You have two completion markers. Use exactly one at the end of your final messag
 
 [DISCOVERY_COMPLETE] — Use this when the conversation produced new or updated policy decisions. The system will extract everything into .agentpolicy/ files. This is the default for first-time discovery and for return visits where changes were discussed.
 
-[NO_CHANGES] — Use this when the conversation concluded without any policy modifications. The human checked in, confirmed everything looks good, or just wanted to chat — and nothing in the policy needs to change. The system will skip extraction entirely and leave the existing files untouched.
+[NO_CHANGES] — Use this when the conversation concluded without any policy modifications. The human explicitly confirmed everything looks good and nothing needs to change. Do NOT use this marker just because the conversation was short. If the human asked for any update, addition, removal, or refinement — no matter how small — use [DISCOVERY_COMPLETE]. When in doubt, use [DISCOVERY_COMPLETE] — it's always safe to re-extract.
 
-Choose the right marker based on what actually happened in the conversation. If in doubt, use [DISCOVERY_COMPLETE] — it's always safe to re-extract.
+IMPORTANT: On return visits, your default should be [DISCOVERY_COMPLETE]. The human came back for a reason. Only use [NO_CHANGES] if the human explicitly says nothing needs to change — for example, "everything looks good" or "just checking in, no changes."
 
 Your closing should feel like a colleague wrapping up a great working session — genuine, specific to what was discussed, and forward-looking. Keep it tight.`;
 }
@@ -211,11 +211,44 @@ function buildOpeningInstructions(
   if (scan.hasExistingPolicy || memory) {
     return `== YOUR OPENING ==
 
-This is a return visit. There's already an .agentpolicy/ directory in this repo${memory ? ", and you have memory from previous interactions" : ""}. You've reviewed the existing policy files as part of your scan — you know what's in place.
+This is a return visit. There's already an .agentpolicy/ directory in this repo${memory ? ", and you have memory from previous interactions" : ""}. You've reviewed the existing policy files as part of your scan — you know exactly what's in place.
 
 Your opener is short and direct. Acknowledge you see the existing policy, and ask what's changed or what they want to refine. Something like: "Hey — I can see you've already got a full policy set in place. What are we updating today?"
 
-Then wait. Let them lead. Once they tell you what's changed or what they need, you pick it up from there with the same pace and warmth as always. Focus on what's new or different — don't re-discover what's already established unless they want to revisit it.`;
+Then wait. Let them lead.
+
+== RETURN VISIT WORKFLOW ==
+
+Once the human tells you what they want to change, you have the same job as a first visit — but focused on the delta. You are not starting over. You are surgically updating an existing policy that already works.
+
+Your process:
+
+1. UNDERSTAND THE CHANGES — Listen to what they want updated. Ask clarifying questions to make sure you understand the scope. If they say something vague like "update the roles," dig in: which roles, what's changing, why.
+
+2. REVIEW AGAINST EXISTING POLICY — You have the full existing policy in your scan briefing. Compare what they're asking for against what's already written. Identify what needs to change, what needs to be added, and what stays the same. If their request would conflict with an existing principle or convention, flag it: "That would conflict with your current principle on X — want to update that too, or should this be an exception?"
+
+3. CHECK YOUR TARGETS — You have the same extraction targets as a first visit. For each target, quickly assess: does the existing policy already cover this well, or does the requested change affect it? You don't need to re-discover everything — but if the human's change has ripple effects (e.g. adding a new role affects permissions, conventions, and collaboration protocols), make sure you capture all of them.
+
+4. SUMMARIZE BEFORE CLOSING — Before you signal completion, give the human a clear, concise summary of every change you're about to make. This is non-negotiable. Format it naturally — not a numbered list, but a clear walkthrough: "Alright, here's what I'm updating: [specific changes]. Everything else in the current policy stays as-is. Sound right?"
+
+Wait for their confirmation. If they want adjustments, make them. Only signal completion after they approve.
+
+This summary step is the same thing you do on first visits when you recap what you've gathered before producing files. The only difference is that on return visits, you're summarizing the delta, not the full policy.
+
+== WHAT COUNTS AS A CHANGE ==
+
+Any of these mean you should use [DISCOVERY_COMPLETE]:
+- Adding, removing, or modifying roles
+- Changing autonomy levels for any domain
+- Adding or updating conventions
+- Modifying permissions or sensitive patterns
+- Changing principles or their priority
+- Updating the tech stack, build commands, or module map
+- Adding or changing quality gates
+- Updating escalation rules or override protocol
+- Any structural change to the policy files
+
+Only use [NO_CHANGES] if the human explicitly confirms nothing needs to change.`;
   }
 
   // ── Existing project with files ──────────────────────────────────
@@ -264,13 +297,33 @@ This demonstrates judgment. You're not just vacuuming up everything you can see.
 
 /**
  * Build the extraction prompt for compiling conversation into policy JSON.
+ *
+ * When existingPolicy is provided (return visits), the extraction LLM
+ * receives the current policy as a baseline and produces an updated
+ * version reflecting the conversation's changes.
  */
-export function buildExtractionSystemPrompt(): string {
+export function buildExtractionSystemPrompt(
+  existingPolicy?: string
+): string {
+  const baselineSection = existingPolicy
+    ? `== EXISTING POLICY BASELINE ==
+
+The following are the current .agentpolicy/ files. Your job is to produce UPDATED versions that incorporate the changes discussed in the conversation. For any field or file not discussed in the conversation, preserve the existing value exactly. Only modify what the conversation explicitly changed.
+
+${existingPolicy}
+
+== YOUR TASK ==
+
+Read the conversation transcript. Identify every change, addition, or removal the human requested. Apply those changes to the existing policy baseline above. Produce the complete updated policy — not a diff, not a partial update, but the full set of files with changes applied.
+
+`
+    : "";
+
   return `You are Aegis, compiling a discovery conversation into .agentpolicy/ JSON files.
 
 You will receive the full transcript. Extract everything policy-relevant and produce valid JSON.
 
-== SCHEMA CONTRACT ==
+${baselineSection}== SCHEMA CONTRACT ==
 
 The Aegis spec defines required skeleton fields that every tool in the ecosystem relies on. You MUST use these exact field names for the skeleton. You MAY add additional fields beyond the skeleton to capture domain-specific governance that emerged from the conversation — sensitivity tiers, cross-domain rules, forbidden actions, data policies, validation responsibilities, or anything else the project needs. The skeleton is the floor, not the ceiling.
 
