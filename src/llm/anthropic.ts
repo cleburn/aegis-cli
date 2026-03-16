@@ -3,7 +3,7 @@ import type { LLMProvider, Message } from "./provider.js";
 
 const MODEL = "claude-opus-4-6";
 const MAX_TOKENS = 8192;
-const MAX_TOKENS_JSON = 16384;
+const MAX_TOKENS_JSON = 128000;
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "Anthropic";
