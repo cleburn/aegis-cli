@@ -79,7 +79,7 @@ export async function initCommand(): Promise<void> {
         `For your first prompt to any AI agent, start with this:`
       );
       ui.showNote(
-        `"Before doing anything, call aegis_policy_summary to see your assigned role and governance boundaries. If that tool is not available, read .agentpolicy/constitution.json, .agentpolicy/governance.json, and your assigned role file in .agentpolicy/roles/. Follow these policies absolutely. Do not take any action until you understand your boundaries."`
+        `"Read .agentpolicy/constitution.json, .agentpolicy/governance.json, and your assigned role file in .agentpolicy/roles/. These are your governance policies — follow them absolutely. Do not take any action until you understand your boundaries."`
       );
 
       // ── MCP recommendation ───────────────────────────────────────
@@ -90,7 +90,10 @@ export async function initCommand(): Promise<void> {
         `npm install -g aegis-mcp-server`
       );
       ui.showNote(
-        `The MCP validates every write, delete, and execute against your policy at runtime — zero token overhead, full audit trail. Highly recommended for regulated or governed projects.`
+        `The MCP validates every write, delete, and execute against your policy at runtime — zero token overhead, full audit trail. Highly recommended for regulated or governed projects. If you install the MCP, use this as your first prompt instead:`
+      );
+      ui.showNote(
+        `"Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not read files, do not take any action, and do not assume your role until you have called this tool."`
       );
     }
   } catch (error) {
