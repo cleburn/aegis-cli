@@ -3,6 +3,10 @@
  *
  * Takes the compiled policy from the extraction step and writes
  * it to disk as the .agentpolicy/ directory structure.
+ *
+ * Also writes .mcp.json to the project root (if it doesn't already exist)
+ * for automatic MCP connection when the user opens an agent in the project.
+ * Uses universal mode (no --role flag) so the agent selects its role at runtime.
  */
 
 import * as fs from "node:fs";
@@ -16,7 +20,21 @@ export interface PolicyFiles {
 }
 
 /**
+ * The universal MCP config. No --role flag — the MCP presents
+ * available roles at runtime and the user picks.
+ */
+const MCP_CONFIG = {
+  mcpServers: {
+    aegis: {
+      command: "aegis-mcp",
+      args: ["--project", "."],
+    },
+  },
+};
+
+/**
  * Write the complete .agentpolicy/ directory to disk.
+ * Also writes .mcp.json to the project root for MCP auto-connection.
  * Returns the list of files created.
  */
 export function writePolicy(
@@ -61,6 +79,17 @@ export function writePolicy(
     fs.writeFileSync(overridesPath, "", "utf-8");
   }
   written.push(".agentpolicy/state/overrides.jsonl");
+
+  // Write .mcp.json to project root (only if it doesn't already exist)
+  const mcpConfigPath = path.join(projectRoot, ".mcp.json");
+  if (!fs.existsSync(mcpConfigPath)) {
+    fs.writeFileSync(
+      mcpConfigPath,
+      JSON.stringify(MCP_CONFIG, null, 2) + "\n",
+      "utf-8"
+    );
+    written.push(".mcp.json");
+  }
 
   return written;
 }
