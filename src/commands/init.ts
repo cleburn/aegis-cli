@@ -73,6 +73,25 @@ export async function initCommand(): Promise<void> {
       const files = writePolicy(cwd, result.policy);
       ui.showFilesCreated(files);
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
+
+      // ── Agent onboarding guidance ────────────────────────────────
+      ui.showNote(
+        `Before your first prompt to any AI agent, start with this:`
+      );
+      ui.showNote(
+        `"Read the .agentpolicy/ directory in this project. These are your governance policies — follow them absolutely. Begin by calling aegis_policy_summary if an Aegis MCP server is connected, or by reading .agentpolicy/constitution.json and .agentpolicy/governance.json, then your assigned role file. Do not take any action until you understand your boundaries."`
+      );
+
+      // ── MCP recommendation ───────────────────────────────────────
+      ui.showNote(
+        `For runtime enforcement, install the Aegis MCP server:`
+      );
+      ui.showNote(
+        `npm install -g aegis-mcp-server`
+      );
+      ui.showNote(
+        `The MCP validates every write, delete, and execute against your policy at runtime — zero token overhead, full audit trail. Highly recommended for regulated or governed projects.`
+      );
     }
   } catch (error) {
     if (error instanceof Error && error.message.includes("SIGINT")) {
