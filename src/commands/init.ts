@@ -76,7 +76,7 @@ export async function initCommand(): Promise<void> {
 
       // ── Agent onboarding guidance ────────────────────────────────
       ui.showNote(
-        `Before your first prompt to any AI agent, start with this:`
+        `For your first prompt to any AI agent, start with this:`
       );
       ui.showNote(
         `"Read the .agentpolicy/ directory in this project. These are your governance policies — follow them absolutely. Begin by calling aegis_policy_summary if an Aegis MCP server is connected, or by reading .agentpolicy/constitution.json and .agentpolicy/governance.json, then your assigned role file. Do not take any action until you understand your boundaries."`
