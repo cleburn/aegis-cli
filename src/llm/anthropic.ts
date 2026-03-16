@@ -74,7 +74,28 @@ export class AnthropicProvider implements LLMProvider {
   ): Promise<T> {
     const jsonSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation — just the JSON object.`;
 
-    const raw = await this.chat(messages, jsonSystemPrompt, MAX_TOKENS_JSON);
+    // Use streaming internally to avoid API timeout on large responses.
+    // The stream collects the full response silently — no token callback needed.
+    const stream = this.client.messages.stream({
+      model: MODEL,
+      max_tokens: MAX_TOKENS_JSON,
+      system: jsonSystemPrompt,
+      messages: messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      })),
+    });
+
+    let raw = "";
+
+    for await (const event of stream) {
+      if (
+        event.type === "content_block_delta" &&
+        event.delta.type === "text_delta"
+      ) {
+        raw += event.delta.text;
+      }
+    }
 
     // Strip any markdown fences if the model wraps anyway
     const cleaned = raw
