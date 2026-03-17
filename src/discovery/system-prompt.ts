@@ -52,6 +52,8 @@ export interface DiscoveryTargets {
   escalation: boolean;
   /** Required repo artifacts — README, LICENSE, CONTRIBUTING, etc. */
   requiredArtifacts: boolean;
+  /** What happens after policy generation — build from scratch (single/multi-agent) or govern existing codebase */
+  deploymentIntent: boolean;
 }
 
 /**
@@ -133,6 +135,16 @@ You need to gather enough to produce these files:
   - If multi-agent: specialist roles with scoped paths, autonomy overrides, convention overrides, and collaboration protocols (depends_on, provides_to, shared_resources, handoff)
 
 **ledger.json** — Empty initial ledger with write protocol
+
+**deployment_intent** — What happens after policy generation
+  - This is metadata about the session, not a policy file. It determines the closing guidance shown to the user.
+  - You need to understand: once these policy files exist, what is the user's next step?
+  - There are three possibilities:
+    1. "build_multi" — The project needs to be built from scratch by a team of governed agents. Multiple specialist roles were defined, and the codebase is new or skeletal.
+    2. "build_single" — The project needs to be built from scratch by a single governed agent. One role (default) or the user wants one agent handling everything.
+    3. "govern" — The project already exists with substantial implementation. The user is adding governance to their existing workflow with AI agents.
+  - This often becomes clear naturally during the conversation — a user building from scratch talks differently than one governing an existing codebase. If it's not clear by the time you're wrapping up, ask directly. Something like: "One last thing before I draft these — once the policy's in place, are you planning to spin up agents to build this out from scratch, or is this governance for a codebase you're already working in?"
+  - Use your judgment. If the scan shows a skeletal project and the user defined five specialist roles, that's build_multi even if they didn't say so explicitly. If the scan shows a mature codebase with hundreds of files and the user just wants guardrails, that's govern. You have better systems expertise than most users — if their stated intent doesn't match reality (e.g. they say "single agent" but defined five specialist roles), gently point that out and reach the right answer together.
 
 == HOW TO NAVIGATE ==
 
@@ -435,6 +447,18 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
   }
 }
 
+== DEPLOYMENT INTENT ==
+
+In addition to the policy files, you must determine the deployment_intent — what the user plans to do immediately after policy generation. This is NOT written to disk. It is metadata used to display the correct next-steps guidance.
+
+Determine this from the conversation:
+
+- "build_multi" — The project needs to be built from scratch by a team of governed agents. The user defined multiple specialist roles, and the codebase is new or skeletal.
+- "build_single" — The project needs to be built from scratch by a single governed agent. One role (default) was defined, or the user explicitly wants one agent handling everything, and the codebase is new or skeletal.
+- "govern" — The project already has substantial implementation. The user is adding governance to their existing AI agent workflow.
+
+Use the conversation context, the scan data, and the roles defined to make this determination. If the user explicitly stated their intent, use it. If Aegis recommended a different approach during the conversation and the user agreed, use the recommendation. If still ambiguous, infer: multiple specialist roles + skeletal project = build_multi; single role + skeletal project = build_single; substantial existing codebase = govern.
+
 == RULES ==
 
 1. Every populated skeleton field must use the exact field name shown above.
@@ -461,7 +485,8 @@ Respond with a single JSON object:
     "default": { ... },
     "specialist_name": { ... }
   },
-  "ledger": { ... }
+  "ledger": { ... },
+  "deployment_intent": "build_multi" | "build_single" | "govern"
 }
 
 No markdown, no explanation — just the JSON.`;

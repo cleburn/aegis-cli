@@ -27,6 +27,8 @@ export interface DiscoveryResult {
     governance: Record<string, unknown>;
     roles: Record<string, Record<string, unknown>>;
     ledger: Record<string, unknown>;
+    /** What the user should do next — build from scratch (multi/single agent) or govern existing codebase */
+    deployment_intent: "build_multi" | "build_single" | "govern";
   } | null;
 }
 
@@ -244,6 +246,12 @@ export class DiscoveryEngine {
             "Extraction produced an incomplete result. Run aegis init again — sometimes the model needs a second pass."
           );
           return null;
+        }
+
+        // Default deployment_intent if extraction didn't produce one
+        if (!policy.deployment_intent) {
+          const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
+          policy.deployment_intent = roleNames.length > 0 ? "build_multi" : "build_single";
         }
 
         return policy;
