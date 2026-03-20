@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { glob } from "glob";
+import mammoth from "mammoth";
+import * as pdfParse from "pdf-parse";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -293,11 +295,55 @@ function getDeps(pkg: Record<string, unknown> | undefined): string[] {
 /** Hard ceiling — don't even attempt files larger than this */
 const MAX_FILE_SIZE_ABSOLUTE = 1024 * 1024; // 1MB
 
+// ── Document Parsers ──────────────────────────────────────────────────
+
+/**
+ * Extensions that Aegis can parse from binary formats into text.
+ * Maps lowercase extension (with dot) to an async parser function.
+ */
+const PARSEABLE_EXTENSIONS: Record<
+  string,
+  (filePath: string) => Promise<string | null>
+> = {
+  ".docx": parseDocx,
+  ".pdf": parsePdf,
+};
+
+async function parseDocx(filePath: string): Promise<string | null> {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value || null;
+  } catch {
+    return null;
+  }
+}
+
+async function parsePdf(filePath: string): Promise<string | null> {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const result = await (pdfParse as any).default(buffer);
+    return result.text || null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Sentinel for unsupported binary files ─────────────────────────────
+
+const UNSUPPORTED_BINARY = Symbol("unsupported-binary");
+
 /**
  * Read a file's contents, respecting the size cap.
+ * - Plaintext files: read directly with truncation.
+ * - Recognized document formats (DOCX, PDF, XLSX): parse to text.
+ * - Unknown binary files: returns UNSUPPORTED_BINARY symbol so the
+ *   caller can flag it visibly in skippedSensitiveFiles.
  * Returns null if the file doesn't exist, can't be read, or exceeds 1MB.
  */
-function readFileSafe(filePath: string): FileContent | null {
+async function readFileSafe(
+  filePath: string
+): Promise<FileContent | null | typeof UNSUPPORTED_BINARY> {
   try {
     if (!fs.existsSync(filePath)) return null;
 
@@ -307,13 +353,40 @@ function readFileSafe(filePath: string): FileContent | null {
     // Hard ceiling — skip entirely if over 1MB
     if (stat.size > MAX_FILE_SIZE_ABSOLUTE) return null;
 
-    // Skip binary files (rough heuristic: check first 512 bytes for null bytes)
+    // Check first 512 bytes for null bytes (binary heuristic)
     const probe = Buffer.alloc(Math.min(512, stat.size));
     const fd = fs.openSync(filePath, "r");
     fs.readSync(fd, probe, 0, probe.length, 0);
     fs.closeSync(fd);
-    if (probe.includes(0)) return null; // likely binary
 
+    if (probe.includes(0)) {
+      // Binary file detected — check if we have a parser for this format
+      const ext = path.extname(filePath).toLowerCase();
+      const parser = PARSEABLE_EXTENSIONS[ext];
+
+      if (parser) {
+        const extractedText = await parser(filePath);
+        if (extractedText) {
+          const truncated = extractedText.length > MAX_FILE_SIZE;
+          const finalContent = truncated
+            ? extractedText.slice(0, MAX_FILE_SIZE) +
+              `\n\n[... truncated at 10KB — parsed from ${ext.slice(1).toUpperCase()} ...]`
+            : extractedText;
+          return {
+            path: "", // caller sets this
+            content: finalContent,
+            truncated,
+          };
+        }
+        // Parser returned nothing — treat as unsupported
+        return UNSUPPORTED_BINARY;
+      }
+
+      // No parser available for this binary format
+      return UNSUPPORTED_BINARY;
+    }
+
+    // Plaintext path — unchanged
     const truncated = stat.size > MAX_FILE_SIZE;
     const content = fs.readFileSync(filePath, "utf-8");
     const finalContent = truncated
@@ -560,8 +633,8 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       // Read every policy file — Aegis needs to know what's already established
       for (const policyFile of existingPolicyFiles) {
         const fullPath = path.join(policyDir, policyFile);
-        const content = readFileSafe(fullPath);
-        if (content) {
+        const content = await readFileSafe(fullPath);
+        if (content && typeof content !== "symbol") {
           content.path = `.agentpolicy/${policyFile}`;
           existingPolicyContents.push(content);
         }
@@ -636,8 +709,28 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     }
   }
 
-  // Process all files: priority first, then discovered
-  const allFilesToProcess = [...priorityFiles, ...discoveredFiles];
+  // Promote parseable documents at project root to priority list.
+  // A DOCX/PDF/XLSX at root is almost certainly intentional project
+  // documentation — give it the same early-in-briefing treatment
+  // as README.md or package.json regardless of filename.
+  const parseableExtSet = new Set(Object.keys(PARSEABLE_EXTENSIONS));
+  const prioritySet = new Set(priorityFiles.map((f) => f.toLowerCase()));
+
+  const promotedFromDiscovered: string[] = [];
+  const remainingDiscovered: string[] = [];
+
+  for (const relativePath of discoveredFiles) {
+    const ext = path.extname(relativePath).toLowerCase();
+    const isRootLevel = !relativePath.includes(path.sep) && !relativePath.includes("/");
+    if (isRootLevel && parseableExtSet.has(ext) && !prioritySet.has(relativePath.toLowerCase())) {
+      promotedFromDiscovered.push(relativePath);
+    } else {
+      remainingDiscovered.push(relativePath);
+    }
+  }
+
+  // Process all files: priority first, promoted docs second, then everything else
+  const allFilesToProcess = [...priorityFiles, ...promotedFromDiscovered, ...remainingDiscovered];
 
   for (const relativePath of allFilesToProcess) {
     const fullPath = path.join(projectRoot, relativePath);
@@ -661,12 +754,19 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       }
     }
 
-    const content = readFileSafe(fullPath);
-    if (content) {
+    const content = await readFileSafe(fullPath);
+
+    if (content === UNSUPPORTED_BINARY) {
+      // Binary file with no available parser — flag it so Aegis
+      // can mention it during discovery instead of silently dropping it
+      skippedSensitiveFiles.push(
+        `${relativePath} (binary — unsupported format)`
+      );
+    } else if (content && typeof content !== "symbol") {
       content.path = relativePath;
       fileContents.push(content);
     } else if (fs.existsSync(fullPath)) {
-      // File exists but readFileSafe returned null — likely too large or binary
+      // File exists but readFileSafe returned null — likely too large
       try {
         const stat = fs.statSync(fullPath);
         if (stat.isFile() && stat.size > MAX_FILE_SIZE_ABSOLUTE) {
