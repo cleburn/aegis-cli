@@ -587,24 +587,59 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // Limited access
   }
 
-  // ── Read high-value files ────────────────────────────────────────
+  // ── Discover and read all project files ──────────────────────────
+  // Instead of reading from a whitelist, discover every file in the
+  // project and apply safety filters. The HIGH_VALUE_FILES list marks
+  // priority files that get presented first in the briefing, but all
+  // readable files are included. Sensitive files are flagged and not
+  // read — Aegis will ask the user about them during conversation.
   const fileContents: FileContent[] = [];
   const skippedSensitiveFiles: string[] = [];
+  const highValueSet = new Set(HIGH_VALUE_FILES.map((f) => f.toLowerCase()));
 
-  // Collect all files we want to attempt reading
-  const filesToRead = new Set<string>(HIGH_VALUE_FILES);
-
-  // Add any root-level markdown files we didn't hardcode
-  for (const mdFile of findRootMarkdownFiles(projectRoot)) {
-    filesToRead.add(mdFile);
+  // Discover all files in the project (respecting noise exclusions)
+  let allProjectFiles: string[] = [];
+  try {
+    allProjectFiles = glob.sync("**/*", {
+      cwd: projectRoot,
+      nodir: true,
+      dot: true,
+      ignore: [
+        "node_modules/**", "dist/**", "build/**", ".git/**",
+        "__pycache__/**", ".next/**", ".nuxt/**", ".output/**",
+        "coverage/**", ".cache/**", ".turbo/**", ".vercel/**",
+        ".netlify/**", "vendor/**", "target/**", ".agentpolicy/**",
+      ],
+    });
+  } catch {
+    // Fall back to empty if glob fails
   }
 
-  // Add discovered CI workflows
-  for (const workflow of findCIWorkflows(projectRoot)) {
-    filesToRead.add(workflow);
+  // Separate into priority (high-value) and discovered files
+  const priorityFiles: string[] = [];
+  const discoveredFiles: string[] = [];
+
+  for (const relativePath of allProjectFiles) {
+    if (highValueSet.has(relativePath.toLowerCase())) {
+      priorityFiles.push(relativePath);
+    } else {
+      discoveredFiles.push(relativePath);
+    }
   }
 
-  for (const relativePath of filesToRead) {
+  // Also check for high-value files that might not have been caught
+  // by glob (e.g. dotfiles at root that glob missed)
+  for (const hvFile of HIGH_VALUE_FILES) {
+    const fullPath = path.join(projectRoot, hvFile);
+    if (fs.existsSync(fullPath) && !priorityFiles.includes(hvFile)) {
+      priorityFiles.push(hvFile);
+    }
+  }
+
+  // Process all files: priority first, then discovered
+  const allFilesToProcess = [...priorityFiles, ...discoveredFiles];
+
+  for (const relativePath of allFilesToProcess) {
     const fullPath = path.join(projectRoot, relativePath);
 
     // Check sensitivity first
