@@ -124,7 +124,7 @@ You need to gather enough to produce these files:
 
 **governance.json** — The rules every agent follows
   - Autonomy level per domain. Standard domains include: code_modification, dependency_management, file_creation, file_deletion, configuration_changes, infrastructure_changes, agent_recruitment, test_modification, documentation, refactoring. These are starting points — if the project involves areas that need their own governance (e.g. patient_data_access for healthcare, financial_transactions for fintech, pii_handling for projects with personal data, deployment for production releases), create project-specific domains. The schema accepts any domain string. Let the project's needs dictate the domains, not this list.  - File permissions: writable paths, read-only paths, forbidden paths
-  - Sensitive patterns (things agents should never generate or log)
+  - Sensitive patterns for content scanning: regex patterns matched against file content to detect secrets, credentials, API keys, real CUI data markers, or other sensitive strings that agents should never generate or include in code. These are NOT for path-based approval routing — that is handled by role scoping and escalation triggers. Do not put directory paths (e.g. "audit/**", "infra/**") in sensitive_patterns.
   - Coding conventions: component style, state management, error handling, naming, imports, testing patterns, architecture patterns — each with scope, enforcement level, and rationale
   - Quality gate: must_pass_tests, must_pass_lint, must_pass_typecheck, must_add_tests, must_update_docs, max_files_changed, custom checks
   - Escalation: what happens on ambiguity, on conflict between rules, on scope boundary
@@ -380,7 +380,13 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
       "read_only": ["glob patterns"],
       "forbidden": ["glob patterns"]
     },
-    "sensitive_patterns": [{ "pattern": "string", "reason": "string" }]
+    "sensitive_patterns": [{ "pattern": "regex string matched against FILE CONTENT", "reason": "string" }]
+    // IMPORTANT: sensitive_patterns is for CONTENT SCANNING ONLY — regex patterns matched against
+    // the text content of files to detect secrets, credentials, API keys, real data, etc.
+    // Do NOT put file paths or directory globs here (e.g. "audit/**", "infra/**").
+    // Path-based approval routing belongs in escalation.triggers and role scope definitions.
+    // Good patterns: "(AKID|AKIA)[A-Z0-9]{16}", "-----BEGIN.*PRIVATE KEY-----", "password\\s*=", "real_nsn_\\d+", "CAGE:\\s*[A-Z0-9]{5}"
+    // Bad patterns: "audit/**", "infra/**", ".env*" (these are paths, not content)
   },
   "quality_gate": {
     "pre_commit": {
@@ -465,26 +471,26 @@ The handoff prompt must:
 
 1. Instruct the agent to call aegis_policy_summary as its very first action. The Aegis MCP is already configured (.mcp.json is in the project root). The agent must call this tool before reading files, before taking any action, and before assuming any role.
 
-2. After calling aegis_policy_summary, instruct the agent to inform the user that Aegis governance is active and ask for their confirmation to route write operations through Aegis tools.
+2. After calling aegis_policy_summary, the agent will see available roles including "construction" — a built-in role for initial builds and major restructuring. For build_single and build_multi deployment intents, the handoff prompt should instruct the agent to select the construction role. The construction role tells the agent to use the governance files as its blueprint but run all file operations through native tools (not Aegis governed tools), which is significantly faster for initial builds. The MCP logs the construction session for the audit trail.
 
 3. Set the context for what the agent is about to do. This is where the conversation matters. Include:
    - What the project is and what it needs to accomplish
-   - If building from scratch: the recommended sequencing of work (which roles or modules should come first and why — use what Aegis recommended during the conversation, not a generic ordering)
-   - If governing an existing project: what the agent's immediate focus should be
+   - If building from scratch: the recommended sequencing of work (which modules should come first and why — use what Aegis recommended during the conversation, not a generic ordering). Address the agent as a single builder, not as an orchestrator of multiple agents — one agent building the whole project is faster and produces better results than multi-agent swarms.
+   - If governing an existing project: what the agent's immediate focus should be, and instruct it to select the appropriate specialist role (not construction)
    - Any critical compliance or domain-specific context the agent needs from the start (e.g. "this is an ITAR-controlled environment", "synthetic data only, no real CUI", "all infrastructure changes require ISSO approval")
 
 4. Be direct, specific, and ready to paste. No meta-commentary, no options to choose from. One prompt, one path, the right one for this project.
 
-5. Keep it to 2-4 sentences. Dense with context, not verbose. The MCP handles the detailed governance orientation — the handoff prompt just needs to get the agent to call aegis_policy_summary and set the strategic context for what comes next.
+5. Keep it to 2-4 sentences. Dense with context, not verbose. The MCP handles the detailed governance orientation — the handoff prompt just needs to get the agent to call aegis_policy_summary, select the right role, and set the strategic context.
 
-Example (for a multi-role defense project):
-"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This is ClearDefense, a CMMC/ITAR-governed logistics platform being built from scratch inside Azure GCC High. Once your role is confirmed, start with the compliance and audit module to establish the CUI marking engine and synthetic data policies before any dev agents begin producing application code."
+Example (for a multi-role defense project being built from scratch):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role for this initial build. This is ClearDefense, a CMMC/ITAR-governed logistics platform being built from scratch inside Azure GCC High with a C3PAO assessment in October 2026. Read the full .agentpolicy/ directory as your blueprint, then build the complete project starting with the compliance and audit foundations — CUI marking engine, audit trail, synthetic data generation, identity/auth — since those define the boundaries everything else builds within."
 
 Example (for a single-agent fintech build):
-"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This is ClearFinTech, a PCI-DSS and SOX-governed financial platform. Build the complete project according to the governance policy, starting with the data layer and compliance infrastructure."
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role for this initial build. This is ClearFinTech, a PCI-DSS and SOX-governed financial platform. Read the full .agentpolicy/ directory as your blueprint, then build the complete project starting with the data layer and compliance infrastructure."
 
 Example (for governing an existing project):
-"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This project has an existing codebase with governance now in place. Review your role boundaries before making any changes."
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This project has an existing codebase with governance now in place. Select your assigned role and review your boundaries before making any changes."
 
 == RULES ==
 
@@ -500,6 +506,7 @@ Example (for governing an existing project):
 10. Required artifacts must include at minimum README.md.
 11. Override protocol defaults to warn_confirm_and_log. If the human identified policies as absolutely non-negotiable or referenced regulatory requirements, list those in immutable_policies.
 12. Build commands belong in constitution, not governance.
+13. sensitive_patterns must contain ONLY regex patterns for content scanning (detecting secrets, credentials, real data in file content). Never put file paths or directory globs in sensitive_patterns — path-based enforcement belongs in role scoping and escalation triggers.
 
 OUTPUT FORMAT:
 
