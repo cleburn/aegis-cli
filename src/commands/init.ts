@@ -93,93 +93,43 @@ export async function initCommand(): Promise<void> {
 }
 
 /**
- * Display context-aware next steps based on deployment intent.
+ * Display context-aware next steps after policy generation.
  *
- * The deployment_intent was determined by Aegis during the discovery
- * conversation — either from explicit user statement, Aegis's recommendation,
- * or inference from the project state and roles defined.
- *
- * Shows the recommended prompt first, then alternatives, then the MCP block.
+ * Three blocks:
+ * 1. Custom handoff prompt — crafted by the extraction LLM from the
+ *    full conversation context. Ready to paste into the next agent session.
+ * 2. MCP note — confirms the connection is already configured.
+ * 3. Future session prompt — the standard prompt for every session after
+ *    the initial build, ensuring agents always start in compliance.
  */
 function showNextSteps(
   ui: TerminalUI,
   policy: NonNullable<import("../discovery/engine.js").DiscoveryResult["policy"]>
 ): void {
-  const intent = policy.deployment_intent;
-  const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
-
-  ui.showNote(`── Next Steps ──`);
-
-  // ── Recommended prompt based on deployment intent ─────────────
-  if (intent === "build_multi") {
-    ui.showNote(
-      `Your project has ${roleNames.length} specialist roles (${roleNames.join(", ")}). To build the full project with a governed agent team, start your agent session with this prompt:`
-    );
-    ui.showNote(
-      `"Read the .agentpolicy/ directory — constitution, governance, all role files, and the ledger. You are managing a full agent team: ${roleNames.join(", ")}. Deploy them according to their role definitions. The goal is to implement the full project from the existing skeleton. Each agent works within its scope, follows the governance rules, logs to the ledger, and coordinates through the ledger as the handoff protocol. Start with the roles whose output other roles depend on."`
-    );
-  } else if (intent === "build_single") {
-    ui.showNote(
-      `To build the project with a governed agent, start your agent session with this prompt:`
-    );
-    ui.showNote(
-      `"Read the .agentpolicy/ directory and any project documentation. Build the complete project according to the governance policy. Every decision you make should come from the policy files. When you're done, make sure everything passes the quality gate defined in governance.json."`
-    );
-  } else {
-    // "govern" — existing project getting governance added
-    ui.showNote(
-      `To work on this project with a governed agent, start your agent session with this prompt:`
-    );
-    ui.showNote(
-      `"Read .agentpolicy/constitution.json, .agentpolicy/governance.json, and your assigned role file in .agentpolicy/roles/. These are your governance policies — follow them absolutely. Do not take any action until you understand your boundaries."`
-    );
-  }
-
-  // ── Alternative prompts ──────────────────────────────────────────
-  ui.showNote(`── Alternative Approaches ──`);
-
-  if (intent !== "govern") {
-    ui.showNote(
-      `If your project is already built and you just need governed agents working within it:`
-    );
-    ui.showNote(
-      `"Read .agentpolicy/constitution.json, .agentpolicy/governance.json, and your assigned role file in .agentpolicy/roles/. These are your governance policies — follow them absolutely. Do not take any action until you understand your boundaries."`
-    );
-  }
-
-  if (intent !== "build_single" && roleNames.length === 0) {
-    ui.showNote(
-      `If you want a single agent to build the project from scratch:`
-    );
-    ui.showNote(
-      `"Read the .agentpolicy/ directory and any project documentation. Build the complete project according to the governance policy. Every decision you make should come from the policy files. When you're done, make sure everything passes the quality gate defined in governance.json."`
-    );
-  }
-
-  if (intent !== "build_multi" && roleNames.length > 0) {
-    ui.showNote(
-      `If you want to deploy your ${roleNames.length} specialist roles (${roleNames.join(", ")}) as a full agent team:`
-    );
-    ui.showNote(
-      `"Read the .agentpolicy/ directory — constitution, governance, all role files, and the ledger. You are managing a full agent team: ${roleNames.join(", ")}. Deploy them according to their role definitions. Each agent works within its scope, follows the governance rules, logs to the ledger, and coordinates through the ledger as the handoff protocol."`
-    );
-  }
-
-  // ── MCP recommendation ───────────────────────────────────────────
-  ui.showNote(`── Runtime Enforcement ──`);
+  // ── Custom handoff prompt ────────────────────────────────────────
+  ui.showNote(`── Your Handoff Prompt ──`);
   ui.showNote(
-    `For runtime enforcement, install the Aegis MCP server:`
+    `Copy this into your next agent session to get started:`
+  );
+  ui.showNote(
+    `"${policy.handoff_prompt}"`
+  );
+
+  // ── MCP note ─────────────────────────────────────────────────────
+  ui.showNote(`── MCP ──`);
+  ui.showNote(
+    `The Aegis MCP connection (.mcp.json) is already configured. Install the server if you haven't:`
   );
   ui.showNote(
     `npm install -g aegis-mcp-server`
   );
+
+  // ── Future session prompt ────────────────────────────────────────
+  ui.showNote(`── For All Future Sessions ──`);
   ui.showNote(
-    `The MCP validates every write, delete, and execute against your policy at runtime — zero token overhead, full audit trail. The connection config (.mcp.json) is already in place — just install and go.`
+    `Once the project is live, start every agent session with this prompt:`
   );
   ui.showNote(
-    `If you use the MCP, start with this prompt instead of any of the above:`
-  );
-  ui.showNote(
-    `"Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not read files, do not take any action, and do not assume your role until you have called this tool."`
+    `"Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed."`
   );
 }

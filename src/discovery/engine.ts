@@ -29,6 +29,8 @@ export interface DiscoveryResult {
     ledger: Record<string, unknown>;
     /** What the user should do next — build from scratch (multi/single agent) or govern existing codebase */
     deployment_intent: "build_multi" | "build_single" | "govern";
+    /** Custom handoff prompt crafted by the extraction LLM from the full conversation context */
+    handoff_prompt: string;
   } | null;
 }
 
@@ -252,6 +254,11 @@ export class DiscoveryEngine {
         if (!policy.deployment_intent) {
           const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
           policy.deployment_intent = roleNames.length > 0 ? "build_multi" : "build_single";
+        }
+
+        // Default handoff_prompt if extraction didn't produce one
+        if (!policy.handoff_prompt) {
+          policy.handoff_prompt = "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.";
         }
 
         return policy;

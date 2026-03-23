@@ -218,8 +218,6 @@ function buildOpeningInstructions(
   memory: Record<string, unknown> | null
 ): string {
   // ── Return visit ─────────────────────────────────────────────────
-  // Triggered by existing .agentpolicy/ directory OR stored memory.
-  // The policy files themselves are context enough — memory is a bonus.
   if (scan.hasExistingPolicy || memory) {
     return `== YOUR OPENING ==
 
@@ -449,7 +447,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 
 == DEPLOYMENT INTENT ==
 
-In addition to the policy files, you must determine the deployment_intent — what the user plans to do immediately after policy generation. This is NOT written to disk. It is metadata used to display the correct next-steps guidance.
+In addition to the policy files, you must determine the deployment_intent — what the user plans to do immediately after policy generation. This is NOT written to disk. It is metadata used alongside the handoff_prompt.
 
 Determine this from the conversation:
 
@@ -458,6 +456,35 @@ Determine this from the conversation:
 - "govern" — The project already has substantial implementation. The user is adding governance to their existing AI agent workflow.
 
 Use the conversation context, the scan data, and the roles defined to make this determination. If the user explicitly stated their intent, use it. If Aegis recommended a different approach during the conversation and the user agreed, use the recommendation. If still ambiguous, infer: multiple specialist roles + skeletal project = build_multi; single role + skeletal project = build_single; substantial existing codebase = govern.
+
+== HANDOFF PROMPT ==
+
+You must produce a handoff_prompt — the exact prompt the user should paste into their next agent session to begin work on this project. This is NOT a template. It is a custom prompt crafted from everything you learned in the conversation.
+
+The handoff prompt must:
+
+1. Instruct the agent to call aegis_policy_summary as its very first action. The Aegis MCP is already configured (.mcp.json is in the project root). The agent must call this tool before reading files, before taking any action, and before assuming any role.
+
+2. After calling aegis_policy_summary, instruct the agent to inform the user that Aegis governance is active and ask for their confirmation to route write operations through Aegis tools.
+
+3. Set the context for what the agent is about to do. This is where the conversation matters. Include:
+   - What the project is and what it needs to accomplish
+   - If building from scratch: the recommended sequencing of work (which roles or modules should come first and why — use what Aegis recommended during the conversation, not a generic ordering)
+   - If governing an existing project: what the agent's immediate focus should be
+   - Any critical compliance or domain-specific context the agent needs from the start (e.g. "this is an ITAR-controlled environment", "synthetic data only, no real CUI", "all infrastructure changes require ISSO approval")
+
+4. Be direct, specific, and ready to paste. No meta-commentary, no options to choose from. One prompt, one path, the right one for this project.
+
+5. Keep it to 2-4 sentences. Dense with context, not verbose. The MCP handles the detailed governance orientation — the handoff prompt just needs to get the agent to call aegis_policy_summary and set the strategic context for what comes next.
+
+Example (for a multi-role defense project):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This is ClearDefense, a CMMC/ITAR-governed logistics platform being built from scratch inside Azure GCC High. Once your role is confirmed, start with the compliance and audit module to establish the CUI marking engine and synthetic data policies before any dev agents begin producing application code."
+
+Example (for a single-agent fintech build):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This is ClearFinTech, a PCI-DSS and SOX-governed financial platform. Build the complete project according to the governance policy, starting with the data layer and compliance infrastructure."
+
+Example (for governing an existing project):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This project has an existing codebase with governance now in place. Review your role boundaries before making any changes."
 
 == RULES ==
 
@@ -486,7 +513,8 @@ Respond with a single JSON object:
     "specialist_name": { ... }
   },
   "ledger": { ... },
-  "deployment_intent": "build_multi" | "build_single" | "govern"
+  "deployment_intent": "build_multi" | "build_single" | "govern",
+  "handoff_prompt": "string — the exact prompt the user should paste into their next agent session"
 }
 
 No markdown, no explanation — just the JSON.`;
