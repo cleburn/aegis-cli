@@ -108,41 +108,39 @@ export async function initCommand(): Promise<void> {
 /**
  * Display context-aware next steps after policy generation.
  *
- * Three blocks:
- * 1. Custom handoff prompt — crafted by the extraction LLM from the
- *    full conversation context. Ready to paste into the next agent session.
- * 2. MCP note — confirms the connection is already configured.
- * 3. Future session prompt — the standard prompt for every session after
- *    the initial build, ensuring agents always start in compliance.
+ * Three colorized blocks:
+ * 1. Custom handoff prompt — blue heading, white prompt text
+ * 2. MCP note — blue heading, gold install command
+ * 3. Future session prompt — blue heading, white prompt text
  */
 function showNextSteps(
   ui: TerminalUI,
   policy: NonNullable<import("../discovery/engine.js").DiscoveryResult["policy"]>
 ): void {
   // ── Custom handoff prompt ────────────────────────────────────────
-  ui.showNote(`── Your Handoff Prompt ──`);
+  ui.showHeading(`── Your Handoff Prompt ──`);
   ui.showNote(
     `Copy this into your next agent session to get started:`
   );
-  ui.showNote(
+  ui.showHighlight(
     `"${policy.handoff_prompt}"`
   );
 
   // ── MCP note ─────────────────────────────────────────────────────
-  ui.showNote(`── MCP ──`);
+  ui.showHeading(`── MCP ──`);
   ui.showNote(
     `The Aegis MCP connection (.mcp.json) is already configured. Install the server if you haven't:`
   );
-  ui.showNote(
+  ui.showCommand(
     `npm install -g aegis-mcp-server`
   );
 
   // ── Future session prompt ────────────────────────────────────────
-  ui.showNote(`── For All Future Sessions ──`);
+  ui.showHeading(`── For All Future Sessions ──`);
   ui.showNote(
     `Once the project is live, start every agent session with this prompt:`
   );
-  ui.showNote(
+  ui.showHighlight(
     `"Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed."`
   );
 }

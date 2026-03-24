@@ -35,6 +35,9 @@ type ConversationItem =
   | { type: "aegis"; message: string }
   | { type: "user"; message: string }
   | { type: "note"; message: string }
+  | { type: "heading"; message: string }
+  | { type: "highlight"; message: string }
+  | { type: "command"; message: string }
   | { type: "intro"; mode: "full" | "quiet" }
   | { type: "files"; files: string[] }
   | { type: "visual"; content: string }
@@ -303,6 +306,28 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
                   <Text>{" "}</Text>
                 </Box>
               );
+            case "heading":
+              return (
+                <Box key={index} flexDirection="column">
+                  <Text>{" "}</Text>
+                  <Text color="#5B8DEF" bold>{"  " + item.message}</Text>
+                  <Text>{" "}</Text>
+                </Box>
+              );
+            case "highlight":
+              return (
+                <Box key={index} flexDirection="column">
+                  <Text>{"  " + item.message}</Text>
+                  <Text>{" "}</Text>
+                </Box>
+              );
+            case "command":
+              return (
+                <Box key={index} flexDirection="column">
+                  <Text color="#FFD700">{"  " + item.message}</Text>
+                  <Text>{" "}</Text>
+                </Box>
+              );
             case "files":
               return (
                 <Box key={index} flexDirection="column">
@@ -460,8 +485,24 @@ export class TerminalUI {
 
   // ── System Messages ──────────────────────────────────────────────
 
+  /** Dim gray text — for supporting details and minor notes */
   showNote(message: string): void {
     this.bridge.addToHistory({ type: "note", message });
+  }
+
+  /** Bold Aegis blue — for section headers in the closing output */
+  showHeading(message: string): void {
+    this.bridge.addToHistory({ type: "heading", message });
+  }
+
+  /** Normal white text — for important content the user should read and act on */
+  showHighlight(message: string): void {
+    this.bridge.addToHistory({ type: "highlight", message });
+  }
+
+  /** Gold text — for commands the user should run */
+  showCommand(message: string): void {
+    this.bridge.addToHistory({ type: "command", message });
   }
 
   showFilesCreated(files: string[]): void {
