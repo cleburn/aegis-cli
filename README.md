@@ -18,6 +18,8 @@ Aegis CLI scans your codebase, conducts a discovery conversation, and generates 
 
 You don't write policy files by hand. You talk to Aegis — it asks sharp questions about your project, your priorities, your boundaries — and compiles your answers into structured, schema-validated JSON that any agent can parse deterministically.
 
+At the end of every session, Aegis produces a custom handoff prompt tailored to the conversation — ready to paste into your next agent session. It also configures the [Aegis MCP server](https://github.com/cleburn/aegis-mcp-server) connection automatically so runtime enforcement is in place from the first agent session.
+
 ## Quick Start
 
 ```bash
@@ -50,13 +52,7 @@ From there, the conversation is focused and specific. Aegis doesn't ask what lan
 
 The conversation moves fast. When Aegis has the full picture, your `.agentpolicy/` directory appears — complete, schema-validated, and ready for every agent that works here next.
 
-## Return Visits
-
-Run `aegis init` again in a repo that already has `.agentpolicy/` and Aegis picks up where you left off. No full rediscovery — it reads the existing policy, asks what's changed, and updates only what needs updating.
-
-## The `.agentpolicy/` Format
-
-This CLI generates files conforming to the [Aegis governance specification](https://github.com/cleburn/aegis-spec). The spec defines four file types:
+## What Gets Generated
 
 | File | Purpose |
 |------|---------|
@@ -64,8 +60,37 @@ This CLI generates files conforming to the [Aegis governance specification](http
 | `governance.json` | Autonomy levels, permissions, conventions, quality gates, escalation |
 | `roles/*.json` | Scoped role definitions with collaboration protocols |
 | `state/ledger.json` | Shared operational state and task tracking |
+| `state/overrides.jsonl` | Append-only log of policy overrides and construction sessions |
+| `sessions/*.json` | Complete session transcripts with closing guidance |
+| `.mcp.json` | MCP server connection config (project root) |
 
-See the [spec repo](https://github.com/cleburn/aegis-spec) for full schema documentation, design principles, and examples.
+The session transcript captures the full discovery conversation plus the handoff prompt, deployment intent, and file list — so you can review the reasoning behind every governance decision at any time.
+
+## Return Visits
+
+Run `aegis init` again in a repo that already has `.agentpolicy/` and Aegis picks up where you left off. It reads the existing policy files and prior session transcripts — it knows the full history of how governance was built and why. No full rediscovery — it asks what's changed, and updates only what needs updating.
+
+## The Handoff
+
+After generating policy files, Aegis displays three things:
+
+1. **Your Handoff Prompt** — A custom prompt crafted from the conversation, ready to paste into your next agent session. For new builds, it instructs the agent to select the construction role and build in the right sequence. For return visits with changes, it describes the specific delta to apply. For existing projects getting governance, it points the agent at the right specialist role.
+
+2. **MCP** — Confirms the MCP connection is configured and provides the install command.
+
+3. **For All Future Sessions** — The standard prompt for every session after the initial build, ensuring agents always start by calling `aegis_policy_summary` and getting user confirmation before proceeding.
+
+## Runtime Enforcement
+
+The [Aegis MCP server](https://github.com/cleburn/aegis-mcp-server) provides runtime enforcement of the governance Aegis CLI generates. The CLI automatically creates the `.mcp.json` connection config, so agents connect to the MCP on their first session without additional setup.
+
+The MCP validates every write, delete, and execute operation against the loaded policy — zero token overhead, full audit trail. It also provides a **construction role** for initial builds, where the agent uses governance files as a blueprint but runs native tools for speed, with the session logged for auditability.
+
+Three artifacts, one governance framework:
+
+- [**aegis-spec**](https://github.com/cleburn/aegis-spec) — The governance standard
+- **aegis-cli** — Generates the governance
+- [**aegis-mcp-server**](https://github.com/cleburn/aegis-mcp-server) — Enforces the governance
 
 ## Requirements
 
