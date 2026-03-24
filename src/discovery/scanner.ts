@@ -665,30 +665,48 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     }
   }
 
-  // ── File counts by extension ─────────────────────────────────────  
+  // ── File counts by extension ─────────────────────────────────────
   const fileCounts: Record<string, number> = {};
-  try {
-    const allFiles = glob.sync("**/*", {
-      cwd: projectRoot,
-      nodir: true,
-      ignore: ["node_modules/**", "dist/**", "build/**", ".git/**", "__pycache__/**"],
-    });
-    for (const file of allFiles) {
-      const ext = path.extname(file).toLowerCase() || "(no ext)";
-      fileCounts[ext] = (fileCounts[ext] || 0) + 1;
+  if (!hasExistingPolicy) {
+    try {
+      const allFiles = glob.sync("**/*", {
+        cwd: projectRoot,
+        nodir: true,
+        ignore: ["node_modules/**", "dist/**", "build/**", ".git/**", "__pycache__/**"],
+      });
+      for (const file of allFiles) {
+        const ext = path.extname(file).toLowerCase() || "(no ext)";
+        fileCounts[ext] = (fileCounts[ext] || 0) + 1;
+      }
+    } catch {
+      // Limited access
     }
-  } catch {
-    // Limited access
   }
 
-  // ── Discover and read all project files ──────────────────────────
-  // Instead of reading from a whitelist, discover every file in the
-  // project and apply safety filters. The HIGH_VALUE_FILES list marks
-  // priority files that get presented first in the briefing, but all
-  // readable files are included. Sensitive files are flagged and not
-  // read — Aegis will ask the user about them during conversation.
+  // ── Discover and read project files ──────────────────────────────
+  // On first visit: discover every file, apply safety filters, read all.
+  // On return visit: skip full discovery — Aegis has policy files and
+  // session transcripts, which are sufficient for delta conversations.
+  // Reading the full codebase on return visits causes context overflow
+  // on large projects (e.g. 43K files, 88MB briefing).
   const fileContents: FileContent[] = [];
   const skippedSensitiveFiles: string[] = [];
+
+  if (hasExistingPolicy) {
+    // Return visit — only read high-value files (README, config, CI)
+    // for lightweight project context alongside the policy files
+    for (const hvFile of HIGH_VALUE_FILES) {
+      const fullPath = path.join(projectRoot, hvFile);
+      if (fs.existsSync(fullPath)) {
+        const content = await readFileSafe(fullPath);
+        if (content && typeof content !== "symbol") {
+          content.path = hvFile;
+          fileContents.push(content);
+        }
+      }
+    }
+  } else {
+
   const highValueSet = new Set(HIGH_VALUE_FILES.map((f) => f.toLowerCase()));
 
   // Discover all files in the project (respecting noise exclusions)
@@ -798,6 +816,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       }
     }
   }
+  } // end first-visit file discovery
 
   // ── Project metadata ─────────────────────────────────────────────
   const projectName = (pkg?.name as string) || path.basename(projectRoot);
