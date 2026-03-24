@@ -97,13 +97,7 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
-    // Strip any markdown fences if the model wraps anyway
-    const cleaned = raw
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?\s*```\s*$/i, "")
-      .trim();
-
-    return JSON.parse(cleaned) as T;
+    return parseJSONResponse<T>(raw);
   }
 
   async validate(): Promise<boolean> {
@@ -118,4 +112,53 @@ export class AnthropicProvider implements LLMProvider {
       return false;
     }
   }
+}
+
+/**
+ * Parse a JSON response from the LLM, stripping any markdown fencing
+ * or preamble the model might have wrapped around it.
+ *
+ * Handles:
+ * - Leading/trailing whitespace and newlines
+ * - ```json ... ``` fences (with or without "json" label)
+ * - Leading prose before the JSON object (finds first `{`)
+ * - Trailing prose after the JSON object (finds last `}`)
+ */
+function parseJSONResponse<T>(raw: string): T {
+  let cleaned = raw.trim();
+
+  // Strip markdown code fences — handle various formats:
+  // ```json\n...\n```, ```\n...\n```, ``` json\n...\n```
+  cleaned = cleaned
+    .replace(/^```\s*(?:json)?\s*\n?/i, "")
+    .replace(/\n?\s*```\s*$/i, "")
+    .trim();
+
+  // If it still doesn't start with { or [, try to find the JSON object
+  if (!cleaned.startsWith("{") && !cleaned.startsWith("[")) {
+    const firstBrace = cleaned.indexOf("{");
+    const firstBracket = cleaned.indexOf("[");
+    const start = firstBrace >= 0 && firstBracket >= 0
+      ? Math.min(firstBrace, firstBracket)
+      : Math.max(firstBrace, firstBracket);
+
+    if (start >= 0) {
+      cleaned = cleaned.slice(start);
+    }
+  }
+
+  // If it has trailing content after the JSON, find the matching close
+  if (cleaned.startsWith("{")) {
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (lastBrace >= 0) {
+      cleaned = cleaned.slice(0, lastBrace + 1);
+    }
+  } else if (cleaned.startsWith("[")) {
+    const lastBracket = cleaned.lastIndexOf("]");
+    if (lastBracket >= 0) {
+      cleaned = cleaned.slice(0, lastBracket + 1);
+    }
+  }
+
+  return JSON.parse(cleaned) as T;
 }
