@@ -59,8 +59,25 @@ export async function initCommand(): Promise<void> {
     if (result.policy) {
       const files = writePolicy(cwd, result.policy);
 
+      // Append closing guidance to transcript for auditability
+      const fullTranscript = [
+        ...result.transcript,
+        {
+          role: "system" as const,
+          content: JSON.stringify({
+            type: "session_closing",
+            files_created: files,
+            policy_path: `${cwd}/.agentpolicy/`,
+            handoff_prompt: result.policy.handoff_prompt,
+            deployment_intent: result.policy.deployment_intent,
+            mcp_install: "npm install -g aegis-mcp-server",
+            future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
+          }, null, 2),
+        },
+      ];
+
       // Write session transcript — append-only, one file per session
-      const transcriptPath = writeTranscript(cwd, result.transcript);
+      const transcriptPath = writeTranscript(cwd, fullTranscript);
       files.push(transcriptPath);
 
       ui.showFilesCreated(files);
