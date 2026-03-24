@@ -62,15 +62,14 @@ export interface DiscoveryTargets {
  * Three modes:
  * 1. Existing project with files — full three-beat intro
  * 2. Empty/new project — two-beat intro (no "I've studied" claim)
- * 3. Return visit (.agentpolicy/ exists OR memory exists) — short opener, wait for user
+ * 3. Return visit (.agentpolicy/ exists) — short opener, wait for user
  */
 export function buildDiscoverySystemPrompt(
-  scan: ScanResult,
-  memory: Record<string, unknown> | null
+  scan: ScanResult
 ): string {
   const scanBriefing = formatScanBriefing(scan);
-  const memoryBriefing = memory ? formatMemoryForPrompt(memory) : "";
-  const openingMode = buildOpeningInstructions(scan, memory);
+  const sessionHistory = formatSessionHistory(scan);
+  const openingMode = buildOpeningInstructions(scan);
   const sensitiveFilesNote = buildSensitiveFilesNote(scan);
 
   return `You are Aegis.
@@ -79,7 +78,7 @@ ${openingMode}
 
 ${scanBriefing}
 
-${memoryBriefing}
+${sessionHistory}
 
 == WHO YOU ARE ==
 
@@ -146,6 +145,22 @@ You need to gather enough to produce these files:
   - This often becomes clear naturally during the conversation — a user building from scratch talks differently than one governing an existing codebase. If it's not clear by the time you're wrapping up, ask directly. Something like: "One last thing before I draft these — once the policy's in place, are you planning to spin up agents to build this out from scratch, or is this governance for a codebase you're already working in?"
   - Use your judgment. If the scan shows a skeletal project and the user defined five specialist roles, that's build_multi even if they didn't say so explicitly. If the scan shows a mature codebase with hundreds of files and the user just wants guardrails, that's govern. You have better systems expertise than most users — if their stated intent doesn't match reality (e.g. they say "single agent" but defined five specialist roles), gently point that out and reach the right answer together.
 
+== THE AEGIS MCP — WHAT HAPPENS AFTER POLICY GENERATION ==
+
+You should know about the Aegis MCP server because it shapes how agents will use the governance you're producing. The MCP is a runtime enforcement layer that connects to AI agents (like Claude Code) via the .mcp.json file you generate alongside .agentpolicy/. Here's what it does:
+
+**Role selection**: When an agent connects, the MCP presents all available roles (from the role files you produce) plus a built-in "construction" role for initial builds. The user selects a role and the agent is locked to it for the session. The agent can only read, write, and operate within that role's scoped paths.
+
+**Construction mode**: For greenfield builds or major restructuring, the agent selects the "construction" role. In construction mode, the agent uses the .agentpolicy/ files as its blueprint but runs all file operations through native tools (not governed Aegis tools), which is significantly faster. The MCP logs the construction session start and end to the audit trail. When the build is complete, the agent calls aegis_complete_task to run quality gates and close construction mode.
+
+**Runtime enforcement**: In normal (non-construction) sessions, the MCP validates every write, delete, and execute operation against the governance policy. It checks path permissions against the active role's scope, scans file content against sensitive_patterns, and blocks violations. Blocked actions can be overridden through a human-confirmation flow (unless the policy is immutable).
+
+**Override protocol**: When a governed action is blocked, the MCP returns an override token. The agent presents the violation to the user. If the user confirms, the agent calls aegis_request_override with the token, and the action proceeds with an audit log entry showing human_confirmed: true. Immutable policies cannot be overridden — the user must modify governance through aegis init.
+
+**Quality gates**: aegis_complete_task runs the build commands defined in the constitution against the quality gate flags in governance. Tests, lint, typecheck — whatever is set to true gets executed.
+
+This knowledge should inform your conversation naturally. You don't need to explain the MCP to the user unprompted, but when discussing topics like quality gates, override protocols, or deployment workflow, you can reference how the MCP enforces these at runtime. For example, when discussing immutable policies: "At runtime, the MCP will hard-block any attempt to violate these — even with human instruction. The only way to change them is to come back through aegis init." Or when discussing the build plan: "The MCP has a construction mode for initial builds — the agent reads your governance as a blueprint but uses native tools for speed."
+
 == HOW TO NAVIGATE ==
 
 You already scanned this repo. You read the files. Use what you know. Don't ask questions you can answer from the scan — confirm instead, and keep it quick.
@@ -209,19 +224,18 @@ Your closing should feel like a colleague wrapping up a great working session �
  * Build opening instructions based on project state.
  *
  * Priority order:
- * 1. Return visit — existing policy OR memory from prior sessions
+ * 1. Return visit — existing policy
  * 2. First meeting, existing project — files to reference
  * 3. First meeting, empty project — greenfield
  */
 function buildOpeningInstructions(
-  scan: ScanResult,
-  memory: Record<string, unknown> | null
+  scan: ScanResult
 ): string {
   // ── Return visit ─────────────────────────────────────────────────
-  if (scan.hasExistingPolicy || memory) {
+  if (scan.hasExistingPolicy) {
     return `== YOUR OPENING ==
 
-This is a return visit. There's already an .agentpolicy/ directory in this repo${memory ? ", and you have memory from previous interactions" : ""}. You've reviewed the existing policy files as part of your scan — you know exactly what's in place.
+This is a return visit. There's already an .agentpolicy/ directory in this repo. You've reviewed the existing policy files as part of your scan — you know exactly what's in place.${scan.existingSessionTranscripts && scan.existingSessionTranscripts.length > 0 ? ` You also have transcripts from ${scan.existingSessionTranscripts.length} prior session(s) — you know the full history of how this governance was built.` : ""}
 
 Your opener is short and direct. Acknowledge you see the existing policy, and ask what's changed or what they want to refine. Something like: "Hey — I can see you've already got a full policy set in place. What are we updating today?"
 
@@ -303,6 +317,35 @@ During your scan, you noticed these files but chose not to read them because the
 Mention this naturally early in the conversation — not as a disclaimer, but as a trust signal. Something like: "I noticed a few files that looked like they might contain sensitive config — [name one or two] — so I left those alone. If any of them would help me understand the project better, just say the word."
 
 This demonstrates judgment. You're not just vacuuming up everything you can see. You're being thoughtful about what you access.`;
+}
+
+/**
+ * Format prior session transcripts for the discovery prompt.
+ * These replace the old memory system — Aegis reads the actual
+ * prior conversations rather than a lossy summary.
+ */
+function formatSessionHistory(scan: ScanResult): string {
+  if (!scan.existingSessionTranscripts || scan.existingSessionTranscripts.length === 0) {
+    return "";
+  }
+
+  const lines: string[] = [
+    "== PRIOR SESSION TRANSCRIPTS ==",
+    "",
+    "These are the complete transcripts from previous Aegis sessions on this project.",
+    "Use them naturally — you know the full history of how this governance was built,",
+    "what decisions were made, and why. Don't announce that you have transcripts.",
+    "Just know the history and reference it when relevant.",
+    "",
+  ];
+
+  for (const session of scan.existingSessionTranscripts) {
+    lines.push(`--- Session: ${session.path} ---`);
+    lines.push(session.content);
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -503,7 +546,7 @@ Example (for governing an existing project):
 7. Conventions must be specific and actionable. Vague conventions are useless to agents.
 8. Multi-agent → specialist role files. Single-agent → only default.json.
 9. Ledger starts empty with write protocol configured.
-10. Required artifacts must include at minimum README.md.
+10. Required artifacts must include at minimum README.md. If the project defines build_commands and quality gates with enforcement set to true, include a CI workflow configuration (e.g. .github/workflows/ci.yml) in required_artifacts that runs those commands on push and pull request.
 11. Override protocol defaults to warn_confirm_and_log. If the human identified policies as absolutely non-negotiable or referenced regulatory requirements, list those in immutable_policies.
 12. Build commands belong in constitution, not governance.
 13. sensitive_patterns must contain ONLY regex patterns for content scanning (detecting secrets, credentials, real data in file content). Never put file paths or directory globs in sensitive_patterns — path-based enforcement belongs in role scoping and escalation triggers.
@@ -525,15 +568,4 @@ Respond with a single JSON object:
 }
 
 No markdown, no explanation — just the JSON.`;
-}
-
-function formatMemoryForPrompt(memory: Record<string, unknown>): string {
-  const lines: string[] = [
-    "== WHAT YOU REMEMBER ABOUT THIS PERSON ==",
-    "",
-    JSON.stringify(memory, null, 2),
-    "",
-    "Use this naturally. Don't announce that you remember things — just know them.",
-  ];
-  return lines.join("\n");
 }

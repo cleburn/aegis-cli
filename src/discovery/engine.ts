@@ -37,7 +37,6 @@ export interface DiscoveryResult {
 export class DiscoveryEngine {
   private provider: LLMProvider;
   private scan: ScanResult;
-  private memory: Record<string, unknown> | null;
   private ui: TerminalUI;
   private messages: Message[] = [];
   private systemPrompt: string;
@@ -45,14 +44,12 @@ export class DiscoveryEngine {
   constructor(
     provider: LLMProvider,
     scan: ScanResult,
-    memory: Record<string, unknown> | null,
     ui: TerminalUI
   ) {
     this.provider = provider;
     this.scan = scan;
-    this.memory = memory;
     this.ui = ui;
-    this.systemPrompt = buildDiscoverySystemPrompt(scan, memory);
+    this.systemPrompt = buildDiscoverySystemPrompt(scan);
   }
 
   /**

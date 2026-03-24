@@ -42,6 +42,8 @@ export interface ScanResult {
   existingPolicyFiles: string[];
   /** Contents of existing .agentpolicy files */
   existingPolicyContents: FileContent[];
+  /** Transcripts from prior Aegis sessions */
+  existingSessionTranscripts: FileContent[];
   /** Raw package.json data if found */
   packageJson?: Record<string, unknown>;
   /** Scripts from package.json (or equivalent) */
@@ -644,7 +646,26 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     }
   }
 
-  // ── File counts by extension ─────────────────────────────────────
+  // ── Session transcripts ──────────────────────────────────────────
+  const existingSessionTranscripts: FileContent[] = [];
+  const sessionsDir = path.join(policyDir, "sessions");
+  if (hasExistingPolicy && fs.existsSync(sessionsDir)) {
+    try {
+      const sessionFiles = glob.sync("*.json", { cwd: sessionsDir }).sort();
+      for (const sessionFile of sessionFiles) {
+        const fullPath = path.join(sessionsDir, sessionFile);
+        const content = await readFileSafe(fullPath);
+        if (content && typeof content !== "symbol") {
+          content.path = `.agentpolicy/sessions/${sessionFile}`;
+          existingSessionTranscripts.push(content);
+        }
+      }
+    } catch {
+      // Can't read sessions
+    }
+  }
+
+  // ── File counts by extension ─────────────────────────────────────  
   const fileCounts: Record<string, number> = {};
   try {
     const allFiles = glob.sync("**/*", {
@@ -800,6 +821,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     hasExistingPolicy,
     existingPolicyFiles,
     existingPolicyContents,
+    existingSessionTranscripts,
     packageJson: pkg,
     scripts,
     fileCounts,

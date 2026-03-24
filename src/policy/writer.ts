@@ -44,10 +44,12 @@ export function writePolicy(
   const policyDir = path.join(projectRoot, ".agentpolicy");
   const rolesDir = path.join(policyDir, "roles");
   const stateDir = path.join(policyDir, "state");
+  const sessionsDir = path.join(policyDir, "sessions");
 
   // Create directories
   fs.mkdirSync(rolesDir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(sessionsDir, { recursive: true });
 
   const written: string[] = [];
 
@@ -92,6 +94,40 @@ export function writePolicy(
   }
 
   return written;
+}
+
+/**
+ * Write the discovery session transcript to .agentpolicy/sessions/.
+ *
+ * Each session gets a timestamped file. Transcripts are append-only —
+ * prior sessions are never modified. On return visits, Aegis reads
+ * all prior transcripts to understand the history of governance decisions.
+ *
+ * Returns the relative path of the written transcript file.
+ */
+export function writeTranscript(
+  projectRoot: string,
+  transcript: Array<{ role: string; content: string }>
+): string {
+  const sessionsDir = path.join(projectRoot, ".agentpolicy", "sessions");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+  const filename = `${timestamp}.json`;
+  const filePath = path.join(sessionsDir, filename);
+
+  const session = {
+    timestamp: now.toISOString(),
+    messages: transcript.map((m) => ({
+      role: m.role,
+      content: m.content,
+    })),
+  };
+
+  fs.writeFileSync(filePath, JSON.stringify(session, null, 2) + "\n", "utf-8");
+
+  return `.agentpolicy/sessions/${filename}`;
 }
 
 function writeJSON(filePath: string, data: Record<string, unknown>): void {

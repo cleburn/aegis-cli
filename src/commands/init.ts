@@ -16,8 +16,7 @@ import { resolveApiKey } from "../config/api-key.js";
 import { AnthropicProvider } from "../llm/anthropic.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
-import { writePolicy } from "../policy/writer.js";
-import { loadMemory, pruneMemory, saveMemory, getProjectMemory } from "../memory/store.js";
+import { writePolicy, writeTranscript } from "../policy/writer.js";
 import { TerminalUI } from "../ui/terminal.js";
 
 export async function initCommand(): Promise<void> {
@@ -42,28 +41,16 @@ export async function initCommand(): Promise<void> {
     const cwd = process.cwd();
     const scan = await scanRepo(cwd);
 
-    // Load and prune memory
-    let memory = loadMemory();
-    memory = pruneMemory(memory);
-    saveMemory(memory);
-    const projectMemory = getProjectMemory(memory, scan.projectName);
-    const hasMemory = Object.keys(projectMemory).length > 0;
-
     // First-time init: play the full intro sequence
-    // Return visit (existing policy OR memory): quiet welcome
-    if (scan.hasExistingPolicy || hasMemory) {
+    // Return visit (existing policy or prior sessions): quiet welcome
+    if (scan.hasExistingPolicy) {
       ui.showWelcome();
     } else {
       await ui.playIntro();
     }
 
     // Run the conversation — this is the whole thing
-    const engine = new DiscoveryEngine(
-      provider,
-      scan,
-      hasMemory ? projectMemory : null,
-      ui
-    );
+    const engine = new DiscoveryEngine(provider, scan, ui);
 
     const result = await engine.run();
 
@@ -71,11 +58,20 @@ export async function initCommand(): Promise<void> {
     // concluded with no modifications needed
     if (result.policy) {
       const files = writePolicy(cwd, result.policy);
+
+      // Write session transcript — append-only, one file per session
+      const transcriptPath = writeTranscript(cwd, result.transcript);
+      files.push(transcriptPath);
+
       ui.showFilesCreated(files);
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
 
       // ── Next Steps ───────────────────────────────────────────────
       showNextSteps(ui, result.policy);
+    } else {
+      // No policy changes, but still record the session transcript
+      const transcriptPath = writeTranscript(cwd, result.transcript);
+      ui.showNote(`Session transcript saved: ${transcriptPath}`);
     }
   } catch (error) {
     if (error instanceof Error && error.message.includes("SIGINT")) {
