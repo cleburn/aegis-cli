@@ -18,7 +18,7 @@ Aegis CLI scans your codebase, conducts a discovery conversation, and generates 
 
 You don't write policy files by hand. You talk to Aegis — it asks sharp questions about your project, your priorities, your boundaries — and compiles your answers into structured, schema-validated JSON that any agent can parse deterministically.
 
-At the end of every session, Aegis produces a custom handoff prompt tailored to the conversation — ready to paste into your next agent session. It also configures the [Aegis MCP server](https://github.com/cleburn/aegis-mcp-server) connection automatically so runtime enforcement is in place from the first agent session.
+At the end of every session, Aegis produces a custom handoff prompt tailored to the conversation — ready to paste into your next agent session. It also configures the [Aegis MCP](https://github.com/cleburn/aegis-mcp) connection automatically so runtime enforcement is in place from the first agent session.
 
 ## Quick Start
 
@@ -82,7 +82,7 @@ After generating policy files, Aegis displays three things:
 
 ## Runtime Enforcement
 
-The [Aegis MCP server](https://github.com/cleburn/aegis-mcp-server) provides runtime enforcement of the governance Aegis CLI generates. The CLI automatically creates the `.mcp.json` connection config, so agents connect to the MCP on their first session without additional setup.
+The [Aegis MCP](https://github.com/cleburn/aegis-mcp) provides runtime enforcement of the governance Aegis CLI generates. The CLI automatically creates the `.mcp.json` connection config, so agents connect to the MCP on their first session without additional setup.
 
 The MCP validates every write, delete, and execute operation against the loaded policy — zero token overhead, full audit trail. It also provides a **construction role** for initial builds, where the agent uses governance files as a blueprint but runs native tools for speed, with the session logged for auditability.
 
@@ -90,7 +90,7 @@ Three artifacts, one governance framework:
 
 - [**aegis-spec**](https://github.com/cleburn/aegis-spec) — The governance standard
 - **aegis-cli** — Generates the governance
-- [**aegis-mcp-server**](https://github.com/cleburn/aegis-mcp-server) — Enforces the governance
+- [**aegis-mcp**](https://github.com/cleburn/aegis-mcp) — Enforces the governance
 
 ## Requirements
 
