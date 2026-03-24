@@ -520,6 +520,7 @@ The handoff prompt must:
    - What the project is and what it needs to accomplish
    - If building from scratch: the recommended sequencing of work (which modules should come first and why — use what Aegis recommended during the conversation, not a generic ordering). Address the agent as a single builder, not as an orchestrator of multiple agents — one agent building the whole project is faster and produces better results than multi-agent swarms.
    - If governing an existing project: what the agent's immediate focus should be, and instruct it to select the appropriate specialist role (not construction)
+   - If this is a return visit where the governance was updated: describe the specific changes that were made and instruct the agent to apply those changes to the existing codebase — do NOT tell it to "build the complete project." The project already exists. The agent needs to implement the delta: new roles, updated conventions, restructured modules, whatever changed. Use the construction role if the changes require significant restructuring; use a specialist role if the changes are scoped to a specific domain.
    - Any critical compliance or domain-specific context the agent needs from the start (e.g. "this is an ITAR-controlled environment", "synthetic data only, no real CUI", "all infrastructure changes require ISSO approval")
 
 4. Be direct, specific, and ready to paste. No meta-commentary, no options to choose from. One prompt, one path, the right one for this project.
@@ -534,6 +535,9 @@ Example (for a single-agent fintech build):
 
 Example (for governing an existing project):
 "Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This project has an existing codebase with governance now in place. Select your assigned role and review your boundaries before making any changes."
+
+Example (for a return visit where governance was updated):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role — the governance for this project was just updated. The changes are: [specific changes, e.g. 'a new supply_chain role was added with its own module scope, the approval routing now includes Ryan Torres as lead developer, and a cross-module data flow compliance test was added as a quality gate']. Read the updated .agentpolicy/ directory, then apply these changes to the existing codebase — update module structure, routing, and tests to match the new governance. Do not rebuild what already works. Before committing, call aegis_complete_task to run quality gates and close the construction session."
 
 == RULES ==
 
