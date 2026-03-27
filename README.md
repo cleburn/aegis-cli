@@ -3,6 +3,12 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/npm/v/aegis-cli?style=flat&label=npm" alt="npm version" />
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/node-%3E%3D18-green?style=flat" alt="Node.js >= 18" />
+</p>
+
+<p align="center">
   <strong>The reference implementation of the <a href="https://github.com/cleburn/aegis-spec">Aegis governance spec</a>.</strong>
 </p>
 
