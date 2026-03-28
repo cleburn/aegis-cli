@@ -75,9 +75,9 @@
   </g>
   
   <g transform="translate(336, 248)">
-    <rect width="88" height="24" rx="4" fill="#1f6feb" opacity="0.15" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.3"/>
-    <text x="44" y="16" text-anchor="middle" font-family="'SF Mono', 'Fira Code', monospace" font-size="11" fill="#58a6ff">
-      zero overhead
+    <rect width="116" height="24" rx="4" fill="#1f6feb" opacity="0.15" stroke="#1f6feb" stroke-width="1" stroke-opacity="0.3"/>
+    <text x="58" y="16" text-anchor="middle" font-family="'SF Mono', 'Fira Code', monospace" font-size="11" fill="#58a6ff">
+      zero token overhead
     </text>
   </g>
 
