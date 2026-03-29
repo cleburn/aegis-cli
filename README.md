@@ -44,6 +44,10 @@ aegis validate
 
 ## How `aegis init` Works
 
+<p align="center">
+  <img src="assets/01-discovery.png" alt="Aegis Discovery" width="800" />
+</p>
+
 Run it in your project root. Aegis scans your repo — not just the file tree, but the actual contents of your config files, documentation, CI workflows, and project structure. By the time the conversation starts, Aegis already knows your stack, your architecture, your build pipeline, and your patterns.
 
 If Aegis detects files that look sensitive — environment variables, credentials, database files — it skips them and tells you what it chose not to read. You decide whether it needs access.
@@ -77,6 +81,10 @@ The session transcript captures the full discovery conversation plus the handoff
 Run `aegis init` again in a repo that already has `.agentpolicy/` and Aegis picks up where you left off. It reads the existing policy files and prior session transcripts — it knows the full history of how governance was built and why. No full rediscovery — it asks what's changed, and updates only what needs updating.
 
 ## The Handoff
+
+<p align="center">
+  <img src="assets/02-handoff.png" alt="Aegis Handoff" width="800" />
+</p>
 
 After generating policy files, Aegis displays three things:
 
