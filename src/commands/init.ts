@@ -12,6 +12,9 @@
  * Aegis at work.
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { resolveApiKey } from "../config/api-key.js";
 import { AnthropicProvider } from "../llm/anthropic.js";
 import { scanRepo } from "../discovery/scanner.js";
@@ -19,8 +22,22 @@ import { DiscoveryEngine } from "../discovery/engine.js";
 import { writePolicy, writeTranscript } from "../policy/writer.js";
 import { TerminalUI } from "../ui/terminal.js";
 
+// Read version from package.json so the banner stays in sync with publishes.
+function readVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // dist/src/commands/init.js → walk up to package.json
+    const pkgPath = join(here, "..", "..", "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export async function initCommand(): Promise<void> {
   const ui = new TerminalUI();
+  const version = readVersion();
 
   try {
     // Resolve API key (this may prompt interactively — that's fine,
@@ -44,9 +61,9 @@ export async function initCommand(): Promise<void> {
     // First-time init: play the full intro sequence
     // Return visit (existing policy or prior sessions): quiet welcome
     if (scan.hasExistingPolicy) {
-      ui.showWelcome();
+      ui.showWelcome(version);
     } else {
-      await ui.playIntro();
+      await ui.playIntro(version);
     }
 
     // Run the conversation — this is the whole thing

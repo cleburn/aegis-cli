@@ -6,6 +6,11 @@
  * a bridge between the imperative engine (which calls methods like
  * startAegisResponse/streamToken/endAegisResponse) and the
  * declarative React tree (which renders based on state).
+ *
+ * The banner is rendered as the first item in the conversation history
+ * via Ink's <Static> region, so it persists at the top of the session
+ * while the discovery conversation streams below it. The metadata line
+ * underneath shows version, attribution, and update hint.
  */
 
 import React, { useState, useEffect } from "react";
@@ -30,6 +35,11 @@ const PROGRESS = chalk.hex("#FFD700");
 const GUTTER_WIDTH = 11;
 const MIN_WIDTH_FOR_ASSEMBLY = 54;
 
+// ── Brand Constants ────────────────────────────────────────────────
+const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
+const POWERED_BY = "powered by Claude Opus 4.6";
+const UPDATE_HINT = "npm install -g aegis-cli@latest to update";
+
 // ── Types ──────────────────────────────────────────────────────────
 type ConversationItem =
   | { type: "aegis"; message: string }
@@ -38,7 +48,7 @@ type ConversationItem =
   | { type: "heading"; message: string }
   | { type: "highlight"; message: string }
   | { type: "command"; message: string }
-  | { type: "intro"; mode: "full" | "quiet" }
+  | { type: "intro"; mode: "full" | "quiet"; version: string }
   | { type: "files"; files: string[] }
   | { type: "visual"; content: string }
   | { type: "error"; message: string };
@@ -148,6 +158,57 @@ function AegisTurn({ message }: { message: string }) {
 function UserTurn({ message }: { message: string }) {
   return (
     <WrappedLines text={message} barColor="#A8D8A8" label="you" dimText />
+  );
+}
+
+// ── Banner Header ──────────────────────────────────────────────────
+//
+// Renders the wordmark, tagline, and metadata line at the top of the
+// conversation. Both first-time and return visit modes use this — the
+// `mode` flag is preserved for any future divergence but currently
+// renders the same content in both cases.
+
+function BannerHeader({ version }: { version: string; mode: "full" | "quiet" }) {
+  const logoLines = AEGIS_LOGO.split("\n");
+  const metadata = `v${version}  ·  ${POWERED_BY}  ·  ${UPDATE_HINT}`;
+
+  return (
+    <Box flexDirection="column">
+      <Text>{" "}</Text>
+      {logoLines.map((line, i) => {
+        const isBlock =
+          line.includes("\u2588") ||
+          line.includes("\u2554") ||
+          line.includes("\u2557") ||
+          line.includes("\u255A") ||
+          line.includes("\u255D") ||
+          line.includes("\u2550");
+        const isSubtitle = line.includes("governance for ai agents");
+
+        if (isBlock) {
+          return (
+            <Text key={i} color="#5B8DEF">
+              {line}
+            </Text>
+          );
+        }
+        if (isSubtitle) {
+          return (
+            <Text key={i} dimColor>
+              {line}
+            </Text>
+          );
+        }
+        return <Text key={i}>{line}</Text>;
+      })}
+      <Text>{" "}</Text>
+      <Text dimColor>{"  " + AEGIS_TAGLINE}</Text>
+      <Text>{" "}</Text>
+      <Text dimColor>{"  " + metadata}</Text>
+      <Text>{" "}</Text>
+      <Text dimColor>{"  aegis init"}</Text>
+      <Text>{" "}</Text>
+    </Box>
   );
 }
 
@@ -292,13 +353,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
             case "user":
               return <UserTurn key={index} message={item.message} />;
             case "intro":
-              return (
-                <Box key={index} flexDirection="column">
-                  <Text>{" "}</Text>
-                  <Text dimColor>{"  aegis init"}</Text>
-                  <Text>{" "}</Text>
-                </Box>
-              );
+              return <BannerHeader key={index} version={item.version} mode={item.mode} />;
             case "note":
               return (
                 <Box key={index} flexDirection="column">
@@ -411,18 +466,14 @@ export class TerminalUI {
 
   // ── Intro Sequence ───────────────────────────────────────────────
 
-  async playIntro(): Promise<void> {
-    process.stdout.write("\x1b[2J\x1b[H");
-    process.stdout.write(colorizeLogo(AEGIS_LOGO));
-    await sleep(1500);
-    process.stdout.write("\x1b[2J\x1b[H");
-
+  async playIntro(version: string): Promise<void> {
     this.ensureRendered();
+    this.bridge.addToHistory({ type: "intro", mode: "full", version });
   }
 
-  showWelcome(): void {
+  showWelcome(version: string): void {
     this.ensureRendered();
-    this.bridge.addToHistory({ type: "intro", mode: "quiet" });
+    this.bridge.addToHistory({ type: "intro", mode: "quiet", version });
   }
 
   // ── Conversation ─────────────────────────────────────────────────
@@ -532,23 +583,4 @@ export class TerminalUI {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function colorizeLogo(text: string): string {
-  const lines = text.split("\n");
-  return lines
-    .map((line) => {
-      if (line.includes("governance for ai agents")) return DIM(line);
-      if (
-        line.includes("\u2588") ||
-        line.includes("\u2554") ||
-        line.includes("\u2557") ||
-        line.includes("\u255A") ||
-        line.includes("\u255D") ||
-        line.includes("\u2550")
-      )
-        return AEGIS_COLOR(line);
-      return line;
-    })
-    .join("\n");
 }
