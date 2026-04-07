@@ -9,8 +9,9 @@
  *
  * The banner is rendered as the first item in the conversation history
  * via Ink's <Static> region, so it persists at the top of the session
- * while the discovery conversation streams below it. The metadata line
- * underneath shows version, attribution, and update hint.
+ * while the discovery conversation streams below it. The metadata block
+ * shows version, attribution, update hint, and the three available
+ * commands with their descriptions.
  */
 
 import React, { useState, useEffect } from "react";
@@ -34,11 +35,18 @@ const PROGRESS = chalk.hex("#FFD700");
 // ── Layout Constants ───────────────────────────────────────────────
 const GUTTER_WIDTH = 11;
 const MIN_WIDTH_FOR_ASSEMBLY = 54;
+const HEADER_RULE_WIDTH = 73;
 
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
-const POWERED_BY = "powered by Claude Opus 4.6";
-const UPDATE_HINT = "npm install -g aegis-cli@latest to update";
+const POWERED_BY = "Claude Opus 4.6";
+const UPDATE_COMMAND = "npm install -g aegis-cli@latest";
+
+const COMMANDS: Array<{ name: string; description: string }> = [
+  { name: "aegis init", description: "generate or update .agentpolicy/ for this project" },
+  { name: "aegis explain", description: "plain-language summary of the current policy" },
+  { name: "aegis validate", description: "check .agentpolicy/ files against the schemas" },
+];
 
 // ── Types ──────────────────────────────────────────────────────────
 type ConversationItem =
@@ -163,18 +171,22 @@ function UserTurn({ message }: { message: string }) {
 
 // ── Banner Header ──────────────────────────────────────────────────
 //
-// Renders the wordmark, tagline, and metadata line at the top of the
-// conversation. Both first-time and return visit modes use this — the
-// `mode` flag is preserved for any future divergence but currently
-// renders the same content in both cases.
+// Renders the wordmark, tagline, metadata block (version, attribution,
+// update hint), and command reference at the top of the conversation.
+// Both first-time and return visit modes use this — the `mode` flag is
+// preserved for any future divergence but currently renders the same
+// content in both cases.
 
 function BannerHeader({ version }: { version: string; mode: "full" | "quiet" }) {
   const logoLines = AEGIS_LOGO.split("\n");
-  const metadata = `v${version}  ·  ${POWERED_BY}  ·  ${UPDATE_HINT}`;
+  const rule = "─".repeat(HEADER_RULE_WIDTH);
+  const labelWidth = 14; // pad labels so values align in a column
 
   return (
     <Box flexDirection="column">
       <Text>{" "}</Text>
+
+      {/* Wordmark */}
       {logoLines.map((line, i) => {
         const isBlock =
           line.includes("\u2588") ||
@@ -201,12 +213,45 @@ function BannerHeader({ version }: { version: string; mode: "full" | "quiet" }) 
         }
         return <Text key={i}>{line}</Text>;
       })}
+
       <Text>{" "}</Text>
-      <Text dimColor>{"  " + AEGIS_TAGLINE}</Text>
+
+      {/* Tagline — white, full presence */}
+      <Text>{"  " + AEGIS_TAGLINE}</Text>
+
       <Text>{" "}</Text>
-      <Text dimColor>{"  " + metadata}</Text>
+
+      {/* Metadata block — bordered by aegis-blue rules */}
+      <Text color="#5B8DEF">{"  " + rule}</Text>
+      <Box>
+        <Text>{"    "}</Text>
+        <Text dimColor>{"version".padEnd(labelWidth)}</Text>
+        <Text color="#5B8DEF">{`v${version}`}</Text>
+      </Box>
+      <Box>
+        <Text>{"    "}</Text>
+        <Text dimColor>{"powered by".padEnd(labelWidth)}</Text>
+        <Text>{POWERED_BY}</Text>
+      </Box>
+      <Box>
+        <Text>{"    "}</Text>
+        <Text dimColor>{"update".padEnd(labelWidth)}</Text>
+        <Text color="#FFD700">{UPDATE_COMMAND}</Text>
+      </Box>
+      <Text color="#5B8DEF">{"  " + rule}</Text>
+
       <Text>{" "}</Text>
-      <Text dimColor>{"  aegis init"}</Text>
+
+      {/* Commands reference */}
+      <Text color="#5B8DEF" bold>{"  commands:"}</Text>
+      {COMMANDS.map((cmd, i) => (
+        <Box key={i}>
+          <Text>{"    "}</Text>
+          <Text color="#FFD700">{cmd.name.padEnd(16)}</Text>
+          <Text dimColor>{cmd.description}</Text>
+        </Box>
+      ))}
+
       <Text>{" "}</Text>
     </Box>
   );
