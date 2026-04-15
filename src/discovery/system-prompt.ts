@@ -621,6 +621,12 @@ Determine this from the conversation:
 
 Use the conversation context, the scan data, and the roles defined to make this determination. If the user explicitly stated their intent, use it. If Aegis recommended a different approach during the conversation and the user agreed, use the recommendation. If still ambiguous, infer: multiple specialist roles + skeletal project = build_multi; single role + skeletal project = build_single; substantial existing codebase = govern.
 
+RETURN-VISIT OVERRIDE (READ THIS TWICE): If the scan briefing shows this project already has an .agentpolicy/ directory, this is a return visit. Default to "govern" regardless of what deployment_intent was used on the first session. Return visits to a project that already has files beyond .agentpolicy/ — meaning real code has been written — must produce change-scoped handoffs, not greenfield build prompts. The project exists. The agent is not building it from scratch a second time.
+
+Only override the "govern" default on a return visit when BOTH conditions hold: (a) the project is still genuinely skeletal (scan shows almost no source files, no build artifacts, no deployed infra evidence), AND (b) the return visit is about restructuring before real code was written. In every other return-visit case — including cases where the codebase is large and the governance change is small — use "govern".
+
+Signals that a project is NOT skeletal and therefore deployment_intent = govern: any non-trivial source tree, a populated tests directory, CI config committed, a deployed environment mentioned in conversation, dependencies installed and used, production artifacts referenced. When in doubt on a return visit, pick govern. The cost of a build-from-scratch handoff on an existing codebase is catastrophically higher than the cost of a govern handoff on a skeletal one.
+
 == HANDOFF PROMPT ==
 
 You must produce a handoff_prompt — the exact prompt the user should paste into their next agent session to begin work on this project. This is NOT a template. It is a custom prompt crafted from everything you learned in the conversation.
@@ -642,17 +648,29 @@ The handoff prompt must:
 
 5. Keep it to 3-5 sentences. Dense with context, not verbose. The MCP handles the detailed governance orientation — the handoff prompt just needs to get the agent to call aegis_policy_summary, select the right role, and set the strategic context. For build prompts, always end with the instruction to call aegis_complete_task before committing — this runs quality gates and closes the construction session.
 
-Example (for a multi-role defense project being built from scratch):
-"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role for this initial build. This is ClearDefense, a CMMC/ITAR-governed logistics platform being built from scratch inside Azure GCC High with a C3PAO assessment in October 2026. Read the full .agentpolicy/ directory as your blueprint, then build the complete project starting with the compliance and audit foundations — CUI marking engine, audit trail, synthetic data generation, identity/auth — since those define the boundaries everything else builds within. Before committing, call aegis_complete_task to run quality gates and close the construction session."
+THE DOMINANT PATTERN IS RETURN VISITS. Most Aegis sessions after the first are return visits to projects that already have real code. The default handoff pattern for these sessions is: instruct the agent to apply specific governance changes to the existing codebase, and do NOT instruct it to build from scratch. Only produce build-from-scratch handoffs on genuinely first-time initializations or on return visits where the codebase is still skeletal. If you catch yourself writing "build the complete project" in a handoff for a project with an existing .agentpolicy/ directory and real source code, stop — that is the bug this section exists to prevent.
 
-Example (for a single-agent fintech build):
-"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role for this initial build. This is ClearFinTech, a PCI-DSS and SOX-governed financial platform. Read the full .agentpolicy/ directory as your blueprint, then build the complete project starting with the data layer and compliance infrastructure. Before committing, call aegis_complete_task to run quality gates and close the construction session."
+Return-visit handoffs have two sub-patterns:
 
-Example (for governing an existing project):
+- Policy-only changes (e.g. a new CI gate, a new convention, a role permission update, an updated escalation rule). The agent is NOT restructuring code. The handoff instructs it to verify the existing codebase aligns with the updated governance and fix any surfaced issues — nothing more.
+- Structural changes (e.g. a new role with its own module scope, a module split, a cross-module compliance test). The agent IS making code changes, but scoped to the delta. The handoff names the changes and tells the agent to apply them to the existing codebase.
+
+Both sub-patterns say "do not rebuild what already works" and "do not restructure or rewrite existing code" beyond what the governance change strictly requires.
+
+Example (for a return visit where governance was updated — POLICY-ONLY change, the dominant pattern):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select your assigned role. The governance for this project was just updated. The changes are: a new Snyk infrastructure-compliance scan was added to the CI quality gate, and a new convention requires PII handling to go through the encryption utility. Read the updated .agentpolicy/ directory, then verify the existing codebase aligns with the new governance. If the new Snyk scan surfaces any issues, fix them. Do not restructure or rewrite existing code. Do not rebuild what already works."
+
+Example (for a return visit where governance was updated — STRUCTURAL change):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role — the governance for this project was just updated with structural changes. The changes are: a new supply_chain role was added with its own module scope, the approval routing now includes Ryan Torres as lead developer, and a cross-module data flow compliance test was added as a quality gate. Read the updated .agentpolicy/ directory, then apply these changes to the existing codebase — update module structure, routing, and tests to match the new governance. Do not rebuild what already works. Do not rewrite existing code outside the scope of these changes. Before committing, call aegis_complete_task to run quality gates and close the construction session."
+
+Example (for governing an existing project — first-time governance on a mature codebase):
 "Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. This project has an existing codebase with governance now in place. Select your assigned role and review your boundaries before making any changes."
 
-Example (for a return visit where governance was updated):
-"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role — the governance for this project was just updated. The changes are: [specific changes, e.g. 'a new supply_chain role was added with its own module scope, the approval routing now includes Ryan Torres as lead developer, and a cross-module data flow compliance test was added as a quality gate']. Read the updated .agentpolicy/ directory, then apply these changes to the existing codebase — update module structure, routing, and tests to match the new governance. Do not rebuild what already works. Before committing, call aegis_complete_task to run quality gates and close the construction session."
+Example (for a multi-role defense project being built from scratch — FIRST-TIME initialization of a skeletal project):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role for this initial build. This is ClearDefense, a CMMC/ITAR-governed logistics platform being built from scratch inside Azure GCC High with a C3PAO assessment in October 2026. Read the full .agentpolicy/ directory as your blueprint, then build the complete project starting with the compliance and audit foundations — CUI marking engine, audit trail, synthetic data generation, identity/auth — since those define the boundaries everything else builds within. Before committing, call aegis_complete_task to run quality gates and close the construction session."
+
+Example (for a single-agent fintech build — FIRST-TIME initialization of a skeletal project):
+"Call aegis_policy_summary now — do not take any other action until you have called this tool and the user has confirmed Aegis governance. Select the construction role for this initial build. This is ClearFinTech, a PCI-DSS and SOX-governed financial platform. Read the full .agentpolicy/ directory as your blueprint, then build the complete project starting with the data layer and compliance infrastructure. Before committing, call aegis_complete_task to run quality gates and close the construction session."
 
 == RULES ==
 
