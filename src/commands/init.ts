@@ -185,7 +185,7 @@ async function runPostCompletionLoop(
   ui: TerminalUI,
   engine: DiscoveryEngine
 ): Promise<void> {
-  ui.showNote(
+  ui.showAegisMessage(
     "If there are no more questions, type /exit to end this session. Otherwise, let me know what's on your mind."
   );
 
