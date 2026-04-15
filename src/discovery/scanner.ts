@@ -333,7 +333,7 @@ async function parsePdf(filePath: string): Promise<string | null> {
 
 // ── Sentinel for unsupported binary files ─────────────────────────────
 
-const UNSUPPORTED_BINARY = Symbol("unsupported-binary");
+export const UNSUPPORTED_BINARY = Symbol("unsupported-binary");
 
 /**
  * Read a file's contents, respecting the size cap.
@@ -343,7 +343,7 @@ const UNSUPPORTED_BINARY = Symbol("unsupported-binary");
  *   caller can flag it visibly in skippedSensitiveFiles.
  * Returns null if the file doesn't exist, can't be read, or exceeds 1MB.
  */
-async function readFileSafe(
+export async function readFileSafe(
   filePath: string
 ): Promise<FileContent | null | typeof UNSUPPORTED_BINARY> {
   try {
@@ -408,7 +408,7 @@ async function readFileSafe(
 /**
  * Check if a relative file path matches sensitive patterns.
  */
-function isSensitiveFile(relativePath: string): boolean {
+export function isSensitiveFile(relativePath: string): boolean {
   // Safe .env variants are explicitly allowed
   const basename = path.basename(relativePath);
   if (SAFE_ENV_PATTERNS.some((p) => p.test(basename))) return false;

@@ -73,40 +73,52 @@ export async function initCommand(): Promise<void> {
 
     // Write policy if changes were made — skip if conversation
     // concluded with no modifications needed
+    let filesCreated: string[] = [];
     if (result.policy) {
-      const files = writePolicy(cwd, result.policy);
+      filesCreated = writePolicy(cwd, result.policy);
 
-      // Append closing guidance to transcript for auditability
-      const fullTranscript = [
-        ...result.transcript,
-        {
-          role: "system" as const,
-          content: JSON.stringify({
-            type: "session_closing",
-            files_created: files,
-            policy_path: `${cwd}/.agentpolicy/`,
-            handoff_prompt: result.policy.handoff_prompt,
-            deployment_intent: result.policy.deployment_intent,
-            mcp_install: "npm install -g aegis-mcp-server",
-            future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
-          }, null, 2),
-        },
-      ];
-
-      // Write session transcript — append-only, one file per session
-      const transcriptPath = writeTranscript(cwd, fullTranscript);
-      files.push(transcriptPath);
-
-      ui.showFilesCreated(files);
+      ui.showFilesCreated(filesCreated);
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
 
       // ── Next Steps ───────────────────────────────────────────────
       showNextSteps(ui, result.policy);
-    } else {
-      // No policy changes, but still record the session transcript
-      const transcriptPath = writeTranscript(cwd, result.transcript);
-      ui.showNote(`Session transcript saved: ${transcriptPath}`);
     }
+
+    // ── Post-completion loop ────────────────────────────────────────
+    //
+    // The session stays open after extraction. The user can ask
+    // follow-up questions, spot issues, or just discuss what was
+    // produced. Policy edits require a new `aegis init` — Aegis
+    // explains this when asked. The session ends when the user types
+    // /exit, /quit, or /done.
+    await runPostCompletionLoop(ui, engine);
+
+    // ── Final transcript write ──────────────────────────────────────
+    //
+    // One file per session, written at session end so it captures
+    // the full conversation including post-completion turns.
+    const finalTranscript = engine.getTranscript();
+    const transcriptEntries: Array<{ role: string; content: string }> = [
+      ...finalTranscript,
+    ];
+
+    if (result.policy) {
+      transcriptEntries.push({
+        role: "system",
+        content: JSON.stringify({
+          type: "session_closing",
+          files_created: filesCreated,
+          policy_path: `${cwd}/.agentpolicy/`,
+          handoff_prompt: result.policy.handoff_prompt,
+          deployment_intent: result.policy.deployment_intent,
+          mcp_install: "npm install -g aegis-mcp-server",
+          future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
+        }, null, 2),
+      });
+    }
+
+    const transcriptPath = writeTranscript(cwd, transcriptEntries);
+    ui.showNote(`Session transcript saved: ${transcriptPath}`);
   } catch (error) {
     if (error instanceof Error && error.message.includes("SIGINT")) {
       console.log("\n");
@@ -160,4 +172,40 @@ function showNextSteps(
   ui.showHighlight(
     `"Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed."`
   );
+}
+
+/**
+ * After files are written (or after NO_CHANGES), keep the session open
+ * so the user can ask follow-up questions or verify the output. Exits
+ * when the user types /exit, /quit, or /done. Every exchange is
+ * captured in the engine's transcript so the session file reflects
+ * the full conversation.
+ */
+async function runPostCompletionLoop(
+  ui: TerminalUI,
+  engine: DiscoveryEngine
+): Promise<void> {
+  ui.showNote(
+    "If there are no more questions, type /exit to end this session. Otherwise, let me know what's on your mind."
+  );
+
+  while (true) {
+    const input = await ui.getUserInput();
+    const normalized = input.trim().toLowerCase();
+
+    if (
+      normalized === "/exit" ||
+      normalized === "/quit" ||
+      normalized === "/done"
+    ) {
+      ui.showNote("Session closed. See you next time.");
+      return;
+    }
+
+    if (normalized === "") {
+      continue;
+    }
+
+    await engine.continueConversation(input);
+  }
 }

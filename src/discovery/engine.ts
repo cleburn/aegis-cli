@@ -10,13 +10,23 @@
  * presence, and then files appeared.
  */
 
+import * as path from "node:path";
 import type { LLMProvider, Message } from "../llm/provider.js";
 import type { ScanResult } from "./scanner.js";
 import {
+  isSensitiveFile,
+  readFileSafe,
+  UNSUPPORTED_BINARY,
+} from "./scanner.js";
+import {
   buildDiscoverySystemPrompt,
   buildExtractionSystemPrompt,
+  buildPostCompletionSystemPrompt,
 } from "./system-prompt.js";
 import type { TerminalUI } from "../ui/terminal.js";
+
+/** Maximum chained [READ_FILE: …] requests per single user turn. */
+const MAX_READ_DEPTH = 5;
 
 export interface DiscoveryResult {
   /** The full conversation transcript */
@@ -99,6 +109,18 @@ export class DiscoveryEngine {
       }
 
       if (response.includes("[DISCOVERY_COMPLETE]")) {
+        // Defensive check: if the marker arrives in a message that also
+        // contains a question mark near the end, the model is asking for
+        // confirmation, not signalling completion. Swallow the marker and
+        // wait for the user to respond. The prompt should prevent this,
+        // but the check guards against drift.
+        if (containsTrailingQuestion(response)) {
+          process.stderr.write(
+            "[aegis] ignored premature [DISCOVERY_COMPLETE] — message contained a trailing question\n"
+          );
+          continue;
+        }
+
         // Policy changes needed — extract and compile
         this.ui.showNote("Drafting your policy files...");
 
@@ -121,25 +143,61 @@ export class DiscoveryEngine {
    * If it takes longer, the animation fills the pause naturally.
    *
    * The stream is buffered to intercept markers so they never appear
-   * in the terminal. The buffer holds tokens until we're sure they
-   * don't contain the start of a marker, then flushes.
+   * in the terminal. Three markers are recognized: [DISCOVERY_COMPLETE],
+   * [NO_CHANGES], and [READ_FILE: <path>]. The first two are fixed
+   * strings; the read marker is variable-length so the buffer holds
+   * anything starting with '[' until the matching ']' arrives.
+   *
+   * If the response contains a [READ_FILE: …] marker, the engine reads
+   * the requested file safely, appends a synthetic user message with
+   * the contents, and recurses to let Aegis continue. Recursion is
+   * bounded by MAX_READ_DEPTH.
    */
-  private async getAegisResponse(): Promise<string> {
+  private async getAegisResponse(depth: number = 0): Promise<string> {
     // Start thinking timer — animation appears only if >2s passes
     this.ui.startThinking();
 
-    const MARKERS = ["[DISCOVERY_COMPLETE]", "[NO_CHANGES]"];
-    const MAX_MARKER_LEN = Math.max(...MARKERS.map((m) => m.length));
     let firstToken = true;
     let buffer = "";
 
-    const flushBuffer = () => {
-      // Only flush content we're sure doesn't contain a marker start
-      const safeLength = buffer.length - MAX_MARKER_LEN;
-      if (safeLength > 0) {
-        const safe = buffer.slice(0, safeLength);
-        buffer = buffer.slice(safeLength);
-        this.ui.streamToken(safe);
+    // Extract any fully-formed [...] spans at the start of the buffer.
+    // Known markers get swallowed silently; unknown bracket spans are
+    // flushed as plain text.
+    const drainBuffer = () => {
+      while (buffer.length > 0) {
+        const openIdx = buffer.indexOf("[");
+        if (openIdx === -1) {
+          // No bracket — flush everything
+          this.ui.streamToken(buffer);
+          buffer = "";
+          return;
+        }
+        if (openIdx > 0) {
+          // Flush plain text before the first '['
+          this.ui.streamToken(buffer.slice(0, openIdx));
+          buffer = buffer.slice(openIdx);
+        }
+        // buffer[0] === '['. Look for the closing ']'.
+        const closeIdx = buffer.indexOf("]");
+        if (closeIdx === -1) {
+          // Marker might still be forming — wait for more tokens
+          return;
+        }
+        const span = buffer.slice(0, closeIdx + 1);
+        const rest = buffer.slice(closeIdx + 1);
+        if (
+          span === "[DISCOVERY_COMPLETE]" ||
+          span === "[NO_CHANGES]" ||
+          /^\[READ_FILE:\s*.+\]$/.test(span)
+        ) {
+          // Swallow silently — the full response string still has these,
+          // so downstream marker checks (completion, read) work.
+          buffer = rest;
+          continue;
+        }
+        // Unknown bracket span — treat as plain text
+        this.ui.streamToken(span);
+        buffer = rest;
       }
     };
 
@@ -148,39 +206,175 @@ export class DiscoveryEngine {
       this.systemPrompt,
       (token) => {
         if (firstToken) {
-          // First token arrived — stop thinking animation, start streaming
           this.ui.stopThinking();
           this.ui.startAegisResponse();
           firstToken = false;
         }
-
         buffer += token;
-
-        // If the buffer contains a full marker, strip it and flush the rest
-        for (const marker of MARKERS) {
-          if (buffer.includes(marker)) {
-            buffer = buffer.replace(marker, "");
-            this.ui.streamToken(buffer);
-            buffer = "";
-            return;
-          }
-        }
-
-        // Flush everything we're sure is safe
-        flushBuffer();
+        drainBuffer();
       }
     );
 
-    // Flush any remaining buffer (minus any markers if present)
+    // Flush anything left in the buffer (stripping markers if present)
     if (buffer.length > 0) {
-      let cleaned = buffer;
-      for (const marker of MARKERS) {
-        cleaned = cleaned.replace(marker, "");
+      const cleaned = buffer
+        .replace(/\[DISCOVERY_COMPLETE\]/g, "")
+        .replace(/\[NO_CHANGES\]/g, "")
+        .replace(/\[READ_FILE:\s*[^\]]+\]/g, "");
+      if (cleaned.length > 0) {
+        this.ui.streamToken(cleaned);
       }
-      this.ui.streamToken(cleaned);
+      buffer = "";
     }
 
-    // If we never got a token (empty response edge case), clean up
+    // Empty response edge case
+    if (firstToken) {
+      this.ui.stopThinking();
+      this.ui.startAegisResponse();
+    }
+
+    this.ui.endAegisResponse();
+
+    // Check for a read request in the full response text
+    const readMatch = response.match(/\[READ_FILE:\s*([^\]]+)\]/);
+    if (readMatch) {
+      const requestedPath = readMatch[1].trim();
+
+      // Strip the marker from the assistant message stored in history —
+      // the marker is control signal, not conversational content.
+      const cleanedResponse = response
+        .replace(/\[READ_FILE:\s*[^\]]+\]/g, "")
+        .trimEnd();
+      this.messages.push({ role: "assistant", content: cleanedResponse });
+
+      // Guard against runaway chains
+      if (depth >= MAX_READ_DEPTH) {
+        this.messages.push({
+          role: "user",
+          content: `[system] Read limit reached for this turn (${MAX_READ_DEPTH} reads). Please respond to the human without another file read.`,
+        });
+        return this.getAegisResponse(depth + 1);
+      }
+
+      // Show the user what's happening, then read the file
+      this.ui.showNote(`Reading ${requestedPath}...`);
+      const readResult = await this.readFileForAegis(requestedPath);
+
+      this.messages.push({ role: "user", content: readResult });
+      return this.getAegisResponse(depth + 1);
+    }
+
+    this.messages.push({ role: "assistant", content: response });
+    return response;
+  }
+
+  /**
+   * Fetch a file on Aegis's behalf during discovery.
+   *
+   * Returns a framed string the model can consume — either the file
+   * contents wrapped in a system-note block, or an error note
+   * explaining why the read was rejected. The string is injected as
+   * a user message so the conversation continues coherently.
+   *
+   * Safety rules (mirrors scanner.ts):
+   * - Reject paths containing ".." segments.
+   * - Reject paths that resolve outside the project root.
+   * - Reject paths matching SENSITIVE_FILE_PATTERNS.
+   * - Delegate actual reading to readFileSafe (size caps, DOCX/PDF parsing).
+   */
+  private async readFileForAegis(requestedPath: string): Promise<string> {
+    const framed = (note: string, body?: string) =>
+      body
+        ? `[system: file read] ${note}\n\n${body}`
+        : `[system: file read] ${note}`;
+
+    const trimmed = requestedPath.trim().replace(/^["']|["']$/g, "");
+    if (!trimmed) {
+      return framed("Read failed: empty path.");
+    }
+
+    // Reject any traversal attempt before resolution
+    if (trimmed.includes("..")) {
+      return framed(
+        `Read rejected: path "${trimmed}" contains ".." — reads are confined to the project root.`
+      );
+    }
+
+    // Reject absolute paths that point outside the project
+    const root = this.scan.root;
+    const normalizedRel = trimmed.startsWith("/")
+      ? path.relative(root, trimmed)
+      : trimmed;
+
+    if (normalizedRel.startsWith("..") || path.isAbsolute(normalizedRel)) {
+      return framed(
+        `Read rejected: path "${trimmed}" resolves outside the project root.`
+      );
+    }
+
+    const absolutePath = path.resolve(root, normalizedRel);
+    const resolvedRelative = path.relative(root, absolutePath);
+    if (resolvedRelative.startsWith("..") || path.isAbsolute(resolvedRelative)) {
+      return framed(
+        `Read rejected: path "${trimmed}" resolves outside the project root.`
+      );
+    }
+
+    if (isSensitiveFile(resolvedRelative)) {
+      return framed(
+        `Read refused: "${resolvedRelative}" matches a sensitive file pattern (env file, credentials, secrets, etc.). Ask the human to share the specific content they want reviewed.`
+      );
+    }
+
+    const result = await readFileSafe(absolutePath);
+    if (result === null) {
+      return framed(
+        `Read failed: "${resolvedRelative}" could not be read — it may not exist, may be too large (>1MB), or may be unreadable.`
+      );
+    }
+    if (result === UNSUPPORTED_BINARY) {
+      return framed(
+        `Read refused: "${resolvedRelative}" is a binary file in a format without a parser (supported: .docx, .pdf).`
+      );
+    }
+
+    const truncatedNote = result.truncated
+      ? " [Content was truncated at 10KB.]"
+      : "";
+    return framed(
+      `Contents of ${resolvedRelative}:${truncatedNote}`,
+      result.content
+    );
+  }
+
+  /**
+   * Send a message in post-completion mode and stream Aegis's response.
+   *
+   * Post-completion mode runs after extraction — the files are written,
+   * the handoff has been shown, and the session stays open so the user
+   * can ask follow-up questions. No markers, no extraction targets, no
+   * policy edits: just continued conversation that gets captured in the
+   * same transcript.
+   */
+  async continueConversation(userInput: string): Promise<string> {
+    this.messages.push({ role: "user", content: userInput });
+
+    this.ui.startThinking();
+
+    let firstToken = true;
+    const response = await this.provider.chatStream(
+      this.messages,
+      buildPostCompletionSystemPrompt(),
+      (token) => {
+        if (firstToken) {
+          this.ui.stopThinking();
+          this.ui.startAegisResponse();
+          firstToken = false;
+        }
+        this.ui.streamToken(token);
+      }
+    );
+
     if (firstToken) {
       this.ui.stopThinking();
       this.ui.startAegisResponse();
@@ -190,6 +384,15 @@ export class DiscoveryEngine {
 
     this.messages.push({ role: "assistant", content: response });
     return response;
+  }
+
+  /**
+   * Return a copy of the current message transcript. Used by the init
+   * command to write the session transcript after the post-completion
+   * loop ends, so the transcript captures the entire session.
+   */
+  getTranscript(): Message[] {
+    return [...this.messages];
   }
 
   /**
@@ -296,4 +499,21 @@ export class DiscoveryEngine {
 
     return sections.join("\n");
   }
+}
+
+/**
+ * Detect whether a response ends in a question — used to guard against
+ * the model emitting a completion marker in the same message where it's
+ * still asking for the user's confirmation.
+ *
+ * Strips completion markers first (they can arrive after the question),
+ * then checks the final 200 characters for a "?".
+ */
+function containsTrailingQuestion(response: string): boolean {
+  const stripped = response
+    .replace(/\[DISCOVERY_COMPLETE\]/g, "")
+    .replace(/\[NO_CHANGES\]/g, "")
+    .trimEnd();
+  const tail = stripped.slice(-200);
+  return tail.includes("?");
 }
