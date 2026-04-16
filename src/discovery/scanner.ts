@@ -868,7 +868,25 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const sessionsDir = path.join(policyDir, "sessions");
   if (hasExistingPolicy && fs.existsSync(sessionsDir)) {
     try {
-      const sessionFiles = glob.sync("*.json", { cwd: sessionsDir }).sort();
+      // Sort by mtime rather than filename so mixed-format directories
+      // (legacy ISO-timestamp transcripts alongside new NN-session.json
+      // ones) still return in chronological order. Pure lexicographic
+      // sort would put NN-prefixed names before ISO-prefixed ones
+      // because "0" < "2", breaking return-visit history order on any
+      // project that was active across the filename-scheme change.
+      const sessionFiles = glob
+        .sync("*.json", { cwd: sessionsDir })
+        .map((name) => {
+          let mtime = 0;
+          try {
+            mtime = fs.statSync(path.join(sessionsDir, name)).mtimeMs;
+          } catch {
+            // Fall back to name-based ordering via mtime=0 on failure
+          }
+          return { name, mtime };
+        })
+        .sort((a, b) => a.mtime - b.mtime)
+        .map((entry) => entry.name);
       for (const sessionFile of sessionFiles) {
         const fullPath = path.join(sessionsDir, sessionFile);
         const result = await readSessionTranscript(fullPath);

@@ -295,13 +295,61 @@ export function writePolicy(
 }
 
 /**
+ * Pick the next filename for a new transcript in .agentpolicy/sessions/.
+ *
+ * Scheme: `NN-initial-setup.json` for the very first session in an
+ * empty directory, `NN-session.json` for every subsequent one. NN is
+ * a zero-padded two-digit prefix that increments from the highest
+ * existing numeric prefix, so new transcripts sort after prior ones
+ * lexicographically and collisions at second-level resolution are
+ * impossible regardless of clock skew.
+ *
+ * Legacy transcripts written by earlier aegis versions used ISO
+ * timestamps as filenames (e.g. 2024-03-15_10-30-45.json). Those do
+ * not match the NN- prefix, so they do not feed the max-prefix
+ * calculation — new transcripts start numbering from 01 even if ISO
+ * transcripts already exist. The "initial-setup" label is reserved
+ * for genuinely empty sessions/ directories; when any transcript
+ * (new or legacy) exists, the label becomes "session".
+ */
+function nextSessionFilename(sessionsDir: string): string {
+  let existing: string[] = [];
+  try {
+    if (fs.existsSync(sessionsDir)) {
+      existing = fs
+        .readdirSync(sessionsDir)
+        .filter((f) => f.endsWith(".json"));
+    }
+  } catch {
+    // Unreadable — treat as empty
+  }
+
+  const isFirst = existing.length === 0;
+
+  let maxPrefix = 0;
+  for (const file of existing) {
+    const match = file.match(/^(\d+)-/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (Number.isFinite(n) && n > maxPrefix) maxPrefix = n;
+    }
+  }
+
+  const nextNum = maxPrefix + 1;
+  const prefix = String(nextNum).padStart(2, "0");
+  const label = isFirst ? "initial-setup" : "session";
+  return `${prefix}-${label}.json`;
+}
+
+/**
  * Write the discovery session transcript to .agentpolicy/sessions/.
  *
- * Each session gets a timestamped file. Transcripts are append-only —
- * prior sessions are never modified. On return visits, Aegis reads
- * all prior transcripts to understand the history of governance decisions.
- *
- * Returns the relative path of the written transcript file.
+ * Filenames use the NN-initial-setup / NN-session scheme (see
+ * nextSessionFilename). The full timestamp lives inside the JSON as
+ * `timestamp` so the audit record is complete without cluttering the
+ * filename. Transcripts are append-only — prior sessions are never
+ * modified. On return visits, Aegis reads every prior transcript to
+ * understand the history of governance decisions.
  */
 export function writeTranscript(
   projectRoot: string,
@@ -310,11 +358,10 @@ export function writeTranscript(
   const sessionsDir = path.join(projectRoot, ".agentpolicy", "sessions");
   fs.mkdirSync(sessionsDir, { recursive: true });
 
-  const now = new Date();
-  const timestamp = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
-  const filename = `${timestamp}.json`;
+  const filename = nextSessionFilename(sessionsDir);
   const filePath = path.join(sessionsDir, filename);
 
+  const now = new Date();
   const session = {
     timestamp: now.toISOString(),
     messages: transcript.map((m) => ({
