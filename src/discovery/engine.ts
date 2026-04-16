@@ -113,30 +113,28 @@ export class DiscoveryEngine {
       const response = await this.getAegisResponse();
 
       // Completion markers can only fire after the user has explicitly
-      // affirmed Aegis's summary. The prompt instructs Aegis to emit
-      // markers only in a second message following a user affirmation,
-      // but the engine enforces independently so a drift in the prompt,
-      // a hallucinated marker, or a model glitch can never start
-      // extraction prematurely. Two gates:
+      // confirmed — but the form of confirmation differs per marker.
+      // [DISCOVERY_COMPLETE] requires an affirmation of proposed
+      // changes ("yes", "proceed", "looks good"). [NO_CHANGES]
+      // requires an explicit statement that nothing needs to change
+      // ("no changes", "nothing needs to change", "everything looks
+      // good") — which overlaps partially with affirmatives but also
+      // includes forms ("just checking in, no changes") that the
+      // generic affirmative matcher correctly rejects for the
+      // DISCOVERY_COMPLETE path. Each marker gets its own gate.
       //
-      //   1. isSimpleAffirmative(userInput) — the user's most recent
-      //      message must read as an unambiguous "go ahead." Anything
-      //      containing a question, a new instruction, a hedge, or a
-      //      refusal blocks marker processing.
-      //   2. containsTrailingQuestion(response) — Aegis's own message
-      //      cannot end in a question if the marker is valid. A marker
-      //      in a message still asking for confirmation is always a
-      //      prompt bug.
+      // containsTrailingQuestion(response) applies to both markers:
+      // Aegis's own message cannot end in a question if the marker
+      // is valid, regardless of which marker.
       //
-      // When either gate fails, the marker is dropped from the control
-      // flow (still swallowed from the user-visible stream above) and
-      // the conversation continues so the user can actually confirm.
-      const userAffirmed = isSimpleAffirmative(userInput);
+      // When a gate fails, the marker is dropped from the control
+      // flow (still swallowed from the user-visible stream above)
+      // and the conversation continues so the user can confirm.
 
       if (response.includes("[NO_CHANGES]")) {
-        if (!userAffirmed || containsTrailingQuestion(response)) {
+        if (!isNoChangeConfirmation(userInput) || containsTrailingQuestion(response)) {
           process.stderr.write(
-            "[aegis] ignored premature [NO_CHANGES] — no unambiguous user affirmation on record\n"
+            "[aegis] ignored premature [NO_CHANGES] — no explicit no-change confirmation on record\n"
           );
           continue;
         }
@@ -152,7 +150,7 @@ export class DiscoveryEngine {
       }
 
       if (response.includes("[DISCOVERY_COMPLETE]")) {
-        if (!userAffirmed || containsTrailingQuestion(response)) {
+        if (!isSimpleAffirmative(userInput) || containsTrailingQuestion(response)) {
           process.stderr.write(
             "[aegis] ignored premature [DISCOVERY_COMPLETE] — no unambiguous user affirmation on record\n"
           );
@@ -644,4 +642,56 @@ function isSimpleAffirmative(userInput: string): boolean {
     "👍", "🚀", "+1",
   ];
   return affirmativeTokens.some((t) => trimmed.includes(t));
+}
+
+/**
+ * Heuristic for "the user's most recent message was an unambiguous
+ * statement that nothing needs to change." Gate for the [NO_CHANGES]
+ * marker, paired with isSimpleAffirmative for [DISCOVERY_COMPLETE].
+ *
+ * Matches the specific no-change forms the system prompt teaches
+ * Aegis to wait for — "no changes", "nothing needs to change",
+ * "everything looks good", "just checking in, no changes". Those
+ * forms either contain hedge words (" no ") or carry no affirmative
+ * token, so isSimpleAffirmative legitimately rejects them — which is
+ * why [NO_CHANGES] gets its own gate.
+ *
+ * Reversal discourse markers ("actually", "but", "wait", "except")
+ * block the match so "no changes, actually add a role" cannot slip
+ * through. Questions always block.
+ */
+function isNoChangeConfirmation(userInput: string): boolean {
+  const trimmed = userInput.trim().toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 200) return false;
+  if (trimmed.includes("?")) return false;
+
+  // Reversal markers indicate the user is qualifying their statement
+  // and likely following up with a new instruction — never fire
+  // [NO_CHANGES] when these are present, even if a no-change phrase
+  // also appears.
+  const reversalMarkers = ["actually", "but ", "wait", "hmm ", "except", "however"];
+  if (reversalMarkers.some((w) => trimmed.includes(w))) return false;
+
+  const noChangePhrases = [
+    "no changes",
+    "no change",
+    "nothing needs to change",
+    "nothing to change",
+    "nothing needs changing",
+    "nothing needs updating",
+    "nothing's changed",
+    "nothing has changed",
+    "everything looks good",
+    "everything's good",
+    "everything still looks good",
+    "looks good as is",
+    "all good here",
+    "all looks good",
+    "no updates needed",
+    "no updates",
+    "no modifications",
+    "we're good",
+    "we're all set",
+  ];
+  return noChangePhrases.some((p) => trimmed.includes(p));
 }
