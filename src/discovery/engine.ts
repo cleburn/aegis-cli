@@ -665,12 +665,25 @@ function isNoChangeConfirmation(userInput: string): boolean {
   if (trimmed.length === 0 || trimmed.length > 200) return false;
   if (trimmed.includes("?")) return false;
 
-  // Reversal markers indicate the user is qualifying their statement
-  // and likely following up with a new instruction — never fire
-  // [NO_CHANGES] when these are present, even if a no-change phrase
-  // also appears.
-  const reversalMarkers = ["actually", "but ", "wait", "hmm ", "except", "however"];
-  if (reversalMarkers.some((w) => trimmed.includes(w))) return false;
+  // Three categories of blockers. ANY match disqualifies the message
+  // from firing [NO_CHANGES], regardless of whether a no-change
+  // phrase is also present. "no changes, also refresh the handoff"
+  // reads as a deliverable request, not a no-change confirmation,
+  // and the extraction path should run.
+  const blockers = [
+    // Reversal discourse markers — user is qualifying their statement
+    "actually", "but ", "wait", "hmm ", "except", "however",
+    // Add-on connectors indicating a new instruction follows
+    "also ", "plus ", "oh and ", "one more", "one thing", "additionally",
+    // Imperative verbs for direct policy edits
+    "add ", "remove ", "change ", "update ", "modify ", "include ",
+    "delete ", "fix ", "create ", "set ", "switch ",
+    // Deliverable regeneration verbs — user wants output produced
+    "refresh", "regenerate", "re-extract", "reextract",
+    "rewrite", "rebuild", "redo", "re-run", "rerun",
+    "extract",
+  ];
+  if (blockers.some((w) => trimmed.includes(w))) return false;
 
   const noChangePhrases = [
     "no changes",
