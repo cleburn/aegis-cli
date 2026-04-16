@@ -20,6 +20,7 @@ import { AnthropicProvider } from "../llm/anthropic.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
 import { writePolicy, writeTranscript, type WriteOutcome } from "../policy/writer.js";
+import { acquireLock, releaseLock, LockConflictError } from "../policy/lock.js";
 import { TerminalUI } from "../ui/terminal.js";
 
 // Read version from package.json so the banner stays in sync with publishes.
@@ -38,6 +39,22 @@ function readVersion(): string {
 export async function initCommand(): Promise<void> {
   const ui = new TerminalUI();
   const version = readVersion();
+  const cwd = process.cwd();
+
+  // Acquire the per-project lock before any interactive work, so a
+  // user who fires a second aegis init in the same repo sees a clear
+  // conflict message rather than two scans clobbering each other.
+  let lockPath: string | null = null;
+  try {
+    lockPath = acquireLock(cwd);
+  } catch (err) {
+    if (err instanceof LockConflictError) {
+      ui.showError(err.message);
+      await ui.destroy();
+      process.exit(1);
+    }
+    throw err;
+  }
 
   try {
     // Resolve API key (this may prompt interactively — that's fine,
@@ -55,7 +72,6 @@ export async function initCommand(): Promise<void> {
     }
 
     // Scan the repo quietly — Aegis does his homework before the meeting
-    const cwd = process.cwd();
     const scan = await scanRepo(cwd);
 
     // First-time init: play the full intro sequence
@@ -130,6 +146,9 @@ export async function initCommand(): Promise<void> {
     );
     process.exit(1);
   } finally {
+    // Release the lock synchronously first so it happens even if
+    // ui.destroy() is cut short by a process.exit further up.
+    if (lockPath) releaseLock(lockPath);
     await ui.destroy();
   }
 }

@@ -173,7 +173,7 @@ export function writePolicy(
       status: "unchanged",
     });
   } else {
-    fs.writeFileSync(overridesPath, "", "utf-8");
+    writeFileAtomic(overridesPath, "");
     outcomes.push({
       path: ".agentpolicy/state/overrides.jsonl",
       status: "created",
@@ -187,11 +187,7 @@ export function writePolicy(
   if (fs.existsSync(mcpConfigPath)) {
     outcomes.push({ path: ".mcp.json", status: "unchanged" });
   } else {
-    fs.writeFileSync(
-      mcpConfigPath,
-      JSON.stringify(MCP_CONFIG, null, 2) + "\n",
-      "utf-8"
-    );
+    writeFileAtomic(mcpConfigPath, JSON.stringify(MCP_CONFIG, null, 2) + "\n");
     outcomes.push({ path: ".mcp.json", status: "created" });
   }
 
@@ -227,11 +223,27 @@ export function writeTranscript(
     })),
   };
 
-  fs.writeFileSync(filePath, JSON.stringify(session, null, 2) + "\n", "utf-8");
+  writeFileAtomic(filePath, JSON.stringify(session, null, 2) + "\n");
 
   return `.agentpolicy/sessions/${filename}`;
 }
 
+/**
+ * Write a file atomically via a per-process temp file and rename.
+ * fs.renameSync is atomic on POSIX for same-filesystem targets, so a
+ * crash between the write and the rename leaves either the old
+ * contents or nothing visible under the target name — never a
+ * half-written file readable by the next aegis run. The temp suffix
+ * includes process.pid to avoid collisions between concurrent callers
+ * on the same target (which the lockfile also prevents, but defense
+ * in depth).
+ */
+function writeFileAtomic(filePath: string, data: string): void {
+  const tmpPath = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmpPath, data, "utf-8");
+  fs.renameSync(tmpPath, filePath);
+}
+
 function writeJSON(filePath: string, data: Record<string, unknown>): void {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  writeFileAtomic(filePath, JSON.stringify(data, null, 2) + "\n");
 }
