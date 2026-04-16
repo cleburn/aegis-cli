@@ -502,19 +502,30 @@ export class TerminalUI {
 
   private ensureRendered(): void {
     if (!this.inkInstance) {
-      // exitOnCtrlC: true is critical for lock hygiene. Ink runs stdin
-      // in raw mode, so a user's Ctrl+C arrives as a 0x03 byte rather
-      // than raising process SIGINT. With exitOnCtrlC: false, our
-      // useInput filter (!key.ctrl && ...) silently drops it and the
-      // process stays alive with the lock held. Flipping it true
-      // routes Ctrl+C through Ink's own shutdown, which unmounts
-      // cleanly and calls process.exit(0). That fires the 'exit'
-      // hook registered in lock.ts, so .agentpolicy/.aegis.lock is
-      // released before the process goes away.
-      this.inkInstance = render(
+      // Ctrl+C under Ink needs explicit handling. Ink runs stdin in
+      // raw mode, so Ctrl+C arrives as a 0x03 byte rather than a
+      // process SIGINT, and useInput's (!key.ctrl && ...) filter
+      // silently drops it. With exitOnCtrlC: true, Ink unmounts the
+      // component tree when it sees 0x03 — but Ink's internal flow is
+      // handleExit → onExit → unmount with no process.exit call, so
+      // the lock cleanup registered in lock.ts (which fires on the
+      // 'exit' event) would not actually run.
+      //
+      // The fix is the waitUntilExit hook below: once Ink has
+      // unmounted, we force process.exit(0), which synchronously
+      // emits 'exit' and triggers lock release. This also acts as
+      // a safety net for normal shutdowns where the engine returned
+      // and destroy() unmounted — process.exit is idempotent, so the
+      // extra call is harmless if Node was already about to exit.
+      const instance = render(
         React.createElement(AegisApp, { bridge: this.bridge }),
         { exitOnCtrlC: true }
       );
+      this.inkInstance = instance;
+      instance
+        .waitUntilExit()
+        .then(() => process.exit(0))
+        .catch(() => process.exit(1));
     }
   }
 

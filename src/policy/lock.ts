@@ -41,14 +41,23 @@ function readLockContents(lockPath: string): LockContents | null {
 
     // Preferred format: JSON with pid + createdAt. Falls back to a
     // bare PID integer so locks written by older aegis versions can
-    // still be inspected and recovered.
+    // still be inspected and recovered. Strict type checks here —
+    // floats, negatives, and non-finite numbers are treated as
+    // corrupt so they cannot silently flow into the stale-age logic.
     try {
       const parsed = JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
-      if (typeof parsed.pid === "number" && parsed.pid > 0) {
+      const pidValid =
+        typeof parsed.pid === "number" &&
+        Number.isInteger(parsed.pid) &&
+        parsed.pid > 0;
+      const createdAtValid =
+        typeof parsed.createdAt === "number" &&
+        Number.isInteger(parsed.createdAt) &&
+        parsed.createdAt >= 0;
+      if (pidValid && createdAtValid) {
         return {
-          pid: parsed.pid,
-          createdAt:
-            typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
+          pid: parsed.pid as number,
+          createdAt: parsed.createdAt as number,
         };
       }
     } catch {

@@ -229,16 +229,20 @@ export function writePolicy(
     // per candidate. Without canonical paths we cannot distinguish a
     // genuine stale entry from an alias of a file we just wrote on a
     // case-insensitive filesystem (Default.json ≡ default.json on
-    // APFS/NTFS), and per-entry skipped rows would make speculative
+    // APFS/NTFS), so per-entry skipped rows would make speculative
     // "stale" claims that could mislead the audit trail.
-    const candidateCount = existingRoleFiles.filter(
+    //
+    // The candidate filenames are still captured in the reason so a
+    // post-incident reader can see which entries were left untouched,
+    // just without the summary labeling any individual name as stale.
+    const candidates = existingRoleFiles.filter(
       (f) => !newRoleFilenames.has(f)
-    ).length;
-    if (candidateCount > 0) {
+    );
+    if (candidates.length > 0) {
       outcomes.push({
         path: ".agentpolicy/roles/",
         status: "skipped",
-        reason: `reconciliation aborted — ${candidateCount} role file(s) left untouched because newly written roles could not be canonicalized`,
+        reason: `reconciliation aborted — could not canonicalize newly written roles; ${candidates.length} role file(s) left untouched (candidates: ${candidates.join(", ")})`,
       });
     }
   }
