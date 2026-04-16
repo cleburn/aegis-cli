@@ -23,10 +23,26 @@ function readConfig(): AegisConfig {
 }
 
 function writeConfig(config: AegisConfig): void {
-  fs.mkdirSync(AEGIS_DIR, { recursive: true });
+  // Explicit 0o700 on the Aegis directory so parent-directory access
+  // also stays owner-only. mkdirSync ignores `mode` when the directory
+  // already exists, which is why chmodSync follows — it re-hardens on
+  // every run, not just creation.
+  fs.mkdirSync(AEGIS_DIR, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(AEGIS_DIR, 0o700);
+  } catch {
+    // Not a hard fail — the file chmod below is the critical barrier.
+  }
+
+  // writeFileSync's `mode` option only applies on file creation; an
+  // overwrite of an existing file leaves the old permission bits
+  // intact. An explicit chmodSync after the write re-hardens the
+  // file to 0o600 on every save so a config file whose permissions
+  // were loosened out-of-band cannot silently stay loose.
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), {
-    mode: 0o600, // Owner read/write only
+    mode: 0o600,
   });
+  fs.chmodSync(CONFIG_PATH, 0o600);
 }
 
 function prompt(question: string, hidden = false): Promise<string> {
