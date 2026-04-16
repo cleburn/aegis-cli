@@ -502,9 +502,18 @@ export class TerminalUI {
 
   private ensureRendered(): void {
     if (!this.inkInstance) {
+      // exitOnCtrlC: true is critical for lock hygiene. Ink runs stdin
+      // in raw mode, so a user's Ctrl+C arrives as a 0x03 byte rather
+      // than raising process SIGINT. With exitOnCtrlC: false, our
+      // useInput filter (!key.ctrl && ...) silently drops it and the
+      // process stays alive with the lock held. Flipping it true
+      // routes Ctrl+C through Ink's own shutdown, which unmounts
+      // cleanly and calls process.exit(0). That fires the 'exit'
+      // hook registered in lock.ts, so .agentpolicy/.aegis.lock is
+      // released before the process goes away.
       this.inkInstance = render(
         React.createElement(AegisApp, { bridge: this.bridge }),
-        { exitOnCtrlC: false }
+        { exitOnCtrlC: true }
       );
     }
   }

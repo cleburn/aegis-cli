@@ -55,9 +55,15 @@ function readLockContents(lockPath: string): LockContents | null {
       // Not JSON — try the legacy bare-pid format
     }
 
-    const pid = parseInt(raw, 10);
-    if (Number.isFinite(pid) && pid > 0) {
-      return { pid, createdAt: 0 };
+    // Legacy format: strict digits-only. parseInt("123abc", 10) would
+    // happily return 123 without the regex guard, which would let
+    // malformed content slip into the legacy path instead of being
+    // rejected as corrupt.
+    if (/^\d+$/.test(raw)) {
+      const pid = parseInt(raw, 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        return { pid, createdAt: 0 };
+      }
     }
   } catch {
     // Unreadable lock
@@ -118,12 +124,15 @@ export function acquireLock(projectRoot: string): string {
 
   // Stale-lock heuristic combines two signals:
   //   1. PID liveness via process.kill(pid, 0) — ESRCH means dead.
-  //   2. Lock age — a lock older than MAX_LOCK_AGE_MS is treated as
-  //      stale even if the PID reports live, because the PID may have
-  //      been recycled by an unrelated process after the original
-  //      holder exited. Without this, a reused PID could strand the
-  //      lock indefinitely until a human deleted the file.
-  const age = existing.createdAt > 0 ? Date.now() - existing.createdAt : Infinity;
+  //   2. Lock age — a JSON lock older than MAX_LOCK_AGE_MS is treated
+  //      as stale even if the PID reports live, because the PID may
+  //      have been recycled by an unrelated process after the original
+  //      holder exited. Legacy bare-PID locks have no createdAt, so
+  //      we skip the age check for them and rely on PID liveness
+  //      alone — otherwise a legitimate older-aegis session would
+  //      get evicted the moment a newer aegis runs.
+  const haveAge = existing.createdAt > 0;
+  const age = haveAge ? Date.now() - existing.createdAt : 0;
   let pidIsLive = false;
   try {
     process.kill(existing.pid, 0);
@@ -139,7 +148,7 @@ export function acquireLock(projectRoot: string): string {
     }
   }
 
-  const isStale = !pidIsLive || age > MAX_LOCK_AGE_MS;
+  const isStale = !pidIsLive || (haveAge && age > MAX_LOCK_AGE_MS);
 
   if (isStale) {
     // Unlink + re-acquire via `wx`. The exclusive-create flag closes
