@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { glob } from "glob";
+import ignoreLib from "ignore";
 import mammoth from "mammoth";
 import * as pdfParse from "pdf-parse";
 
@@ -330,19 +331,26 @@ function resolveForcedTier(): ScanTier | null {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function fileExists(root: string, pattern: string): boolean {
+function fileExists(
+  root: string,
+  pattern: string,
+  isIgnored: IgnoreFilter = () => false
+): boolean {
   if (pattern.endsWith("/")) {
-    return fs.existsSync(path.join(root, pattern));
+    const bare = pattern.replace(/\/+$/, "");
+    if (!fs.existsSync(path.join(root, pattern))) return false;
+    return !isIgnored(bare);
   }
   if (pattern.includes("*")) {
     try {
       const matches = glob.sync(pattern, { cwd: root, nodir: true });
-      return matches.length > 0;
+      return matches.some((m) => !isIgnored(m));
     } catch {
       return false;
     }
   }
-  return fs.existsSync(path.join(root, pattern));
+  if (!fs.existsSync(path.join(root, pattern))) return false;
+  return !isIgnored(pattern);
 }
 
 function readPackageJson(
@@ -494,79 +502,47 @@ export function isSensitiveFile(relativePath: string): boolean {
 }
 
 /**
- * Parse .gitignore and return a set of ignored file paths.
- * This is a simplified parser — handles the most common patterns.
+ * Build a predicate that returns true when a project-relative path is
+ * ignored by .gitignore or .claudeignore. Uses the spec-compliant
+ * `ignore` library so directory patterns (e.g. `docs/`) correctly
+ * match all descendants, negation (`!foo`) works, and path anchoring
+ * matches git's semantics.
+ *
+ * Both files are merged into a single filter so callers don't need to
+ * track two sources. Missing or unreadable files contribute nothing
+ * rather than erroring.
  */
-function parseGitignore(root: string): Set<string> {
-  const ignored = new Set<string>();
-  const gitignorePath = path.join(root, ".gitignore");
+type IgnoreFilter = (relativePath: string) => boolean;
 
-  try {
-    if (!fs.existsSync(gitignorePath)) return ignored;
-    const content = fs.readFileSync(gitignorePath, "utf-8");
-    const patterns = content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
+function buildIgnoreFilter(root: string): IgnoreFilter {
+  const ig = ignoreLib();
 
-    // Use glob to expand each pattern and collect matched files
-    for (const pattern of patterns) {
-      try {
-        const matches = glob.sync(pattern, {
-          cwd: root,
-          dot: true,
-          nodir: false,
-        });
-        for (const match of matches) {
-          ignored.add(match);
-        }
-      } catch {
-        // Invalid pattern, skip
-      }
+  for (const fileName of [".gitignore", ".claudeignore"]) {
+    try {
+      const filePath = path.join(root, fileName);
+      if (!fs.existsSync(filePath)) continue;
+      const content = fs.readFileSync(filePath, "utf-8");
+      ig.add(content);
+    } catch {
+      // Unreadable — skip this source, don't fail the whole scan
     }
-  } catch {
-    // Can't read .gitignore
   }
 
-  return ignored;
-}
-
-/**
- * Parse .claudeignore with the same semantics as .gitignore. Honored
- * alongside .gitignore so users aren't forced to maintain two separate
- * ignore lists for Aegis and Claude Code.
- */
-function parseClaudeignore(root: string): Set<string> {
-  const ignored = new Set<string>();
-  const claudeignorePath = path.join(root, ".claudeignore");
-
-  try {
-    if (!fs.existsSync(claudeignorePath)) return ignored;
-    const content = fs.readFileSync(claudeignorePath, "utf-8");
-    const patterns = content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
-
-    for (const pattern of patterns) {
-      try {
-        const matches = glob.sync(pattern, {
-          cwd: root,
-          dot: true,
-          nodir: false,
-        });
-        for (const match of matches) {
-          ignored.add(match);
-        }
-      } catch {
-        // Invalid pattern, skip
-      }
+  return (relativePath: string) => {
+    if (!relativePath) return false;
+    // `ignore` throws on absolute paths or empty strings. Normalize
+    // defensively — our callers already pass root-relative paths, but
+    // this keeps the predicate robust to '/' prefixes and './' noise.
+    const normalized = relativePath
+      .replace(/^\.\//, "")
+      .replace(/^\/+/, "");
+    if (!normalized) return false;
+    try {
+      return ig.ignores(normalized);
+    } catch {
+      return false;
     }
-  } catch {
-    // Can't read .claudeignore
-  }
-
-  return ignored;
+  };
 }
 
 /**
@@ -669,7 +645,7 @@ function findCIWorkflows(root: string): string[] {
  */
 function detectScanTier(
   root: string,
-  secondaryIgnored: Set<string>
+  isIgnored: IgnoreFilter
 ): {
   tier: ScanTier;
   fileCount: number;
@@ -696,9 +672,7 @@ function detectScanTier(
   const fileCounts: Record<string, number> = {};
 
   for (const rel of candidates) {
-    if (secondaryIgnored.has(rel) || secondaryIgnored.has(path.basename(rel))) {
-      continue;
-    }
+    if (isIgnored(rel)) continue;
     if (isSensitiveFile(rel)) continue;
 
     try {
@@ -730,16 +704,18 @@ function detectScanTier(
 
 export async function scanRepo(root: string): Promise<ScanResult> {
   const projectRoot = path.resolve(root);
-  const pkg = readPackageJson(projectRoot);
+  const isIgnored = buildIgnoreFilter(projectRoot);
+  // Respect ignore rules for package.json itself — a user who explicitly
+  // adds package.json to .claudeignore is saying "don't use this as a
+  // signal." Skipping the read propagates that through every downstream
+  // detector (deps, languages, frameworks, scripts).
+  const pkg = isIgnored("package.json") ? undefined : readPackageJson(projectRoot);
   const deps = getDeps(pkg);
-  const gitignored = parseGitignore(projectRoot);
-  const claudeignored = parseClaudeignore(projectRoot);
-  const ignoredBySecondary = new Set<string>([...gitignored, ...claudeignored]);
 
   // ── Detect languages ─────────────────────────────────────────────
   const languages: string[] = [];
   for (const [lang, signal] of Object.entries(LANGUAGE_SIGNALS)) {
-    if (signal.files.some((f) => fileExists(projectRoot, f))) {
+    if (signal.files.some((f) => fileExists(projectRoot, f, isIgnored))) {
       languages.push(lang);
     }
   }
@@ -750,7 +726,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   // ── Detect frameworks ────────────────────────────────────────────
   const frameworks: string[] = [];
   for (const [fw, signal] of Object.entries(FRAMEWORK_SIGNALS)) {
-    const hasFile = signal.files?.some((f) => fileExists(projectRoot, f));
+    const hasFile = signal.files?.some((f) => fileExists(projectRoot, f, isIgnored));
     const hasDep = signal.deps?.some((d) => deps.includes(d));
     if (hasFile || hasDep) {
       frameworks.push(fw);
@@ -760,7 +736,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   // ── Detect package managers ──────────────────────────────────────
   const packageManagers: string[] = [];
   for (const [pm, files] of Object.entries(PACKAGE_MANAGER_SIGNALS)) {
-    if (files.some((f) => fileExists(projectRoot, f))) {
+    if (files.some((f) => fileExists(projectRoot, f, isIgnored))) {
       packageManagers.push(pm);
     }
   }
@@ -768,7 +744,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   // ── Detect infrastructure ────────────────────────────────────────
   const infrastructure: string[] = [];
   for (const [infra, files] of Object.entries(INFRA_SIGNALS)) {
-    if (files.some((f) => fileExists(projectRoot, f))) {
+    if (files.some((f) => fileExists(projectRoot, f, isIgnored))) {
       infrastructure.push(infra);
     }
   }
@@ -806,7 +782,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   ];
   const configFiles: string[] = [];
   for (const pattern of configSignals) {
-    if (fileExists(projectRoot, pattern)) {
+    if (fileExists(projectRoot, pattern, isIgnored)) {
       configFiles.push(pattern);
     }
   }
@@ -861,7 +837,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   // policy files and transcripts already carry the context.
   const tierResult = hasExistingPolicy
     ? { tier: "normal" as ScanTier, fileCount: 0, byteSize: 0, fileCounts: {} as Record<string, number> }
-    : detectScanTier(projectRoot, ignoredBySecondary);
+    : detectScanTier(projectRoot, isIgnored);
   const scanTier = tierResult.tier;
   const fileCounts = tierResult.fileCounts;
 
@@ -881,8 +857,11 @@ export async function scanRepo(root: string): Promise<ScanResult> {
 
   if (hasExistingPolicy) {
     // Return visit — only read high-value files for lightweight project
-    // context alongside the policy files
+    // context alongside the policy files. Respect ignore rules: if a
+    // user explicitly ignored README.md or package.json, we don't leak
+    // it into the prompt even though it's on the high-value list.
     for (const hvFile of HIGH_VALUE_FILES) {
+      if (isIgnored(hvFile)) continue;
       const fullPath = path.join(projectRoot, hvFile);
       if (fs.existsSync(fullPath)) {
         const content = await readFileSafe(fullPath);
@@ -901,12 +880,14 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     const readTargets = new Set<string>();
 
     for (const hvFile of HIGH_VALUE_FILES) {
+      if (isIgnored(hvFile)) continue;
       if (fs.existsSync(path.join(projectRoot, hvFile))) {
         readTargets.add(hvFile);
       }
     }
 
     for (const wf of findCIWorkflows(projectRoot)) {
+      if (isIgnored(wf)) continue;
       readTargets.add(wf);
     }
 
@@ -1005,10 +986,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       continue;
     }
 
-    if (
-      ignoredBySecondary.has(relativePath) ||
-      ignoredBySecondary.has(path.basename(relativePath))
-    ) {
+    if (isIgnored(relativePath)) {
       if (!SAFE_ENV_PATTERNS.some((p) => p.test(relativePath))) {
         if (fs.existsSync(fullPath)) {
           skippedSensitiveFiles.push(relativePath);
