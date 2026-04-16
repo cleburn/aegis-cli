@@ -464,6 +464,38 @@ function writeJSON(filePath: string, data: Record<string, unknown>): void {
 const AEGIS_GITIGNORE_HEADER = "# Aegis CLI — sensitive session output";
 
 /**
+ * Hard allowlist of paths Aegis is ever permitted to add to a user's
+ * .gitignore. The LLM populates pending_actions.add_to_gitignore at
+ * extraction time but we treat that field as untrusted: a drifted or
+ * hallucinated extraction could ask us to append "src/" or "*" and
+ * silently neuter the user's repo. updateGitignoreEntries rejects
+ * anything outside this set and emits a warning to stderr when it
+ * sees drift. These are the only two Aegis-produced files that need
+ * to stay out of source control — if the product contract ever grows
+ * to include more, they must be added here explicitly, not inferred
+ * from extraction output.
+ */
+const AEGIS_SANCTIONED_GITIGNORE_PATHS = new Set<string>([
+  ".agentpolicy/sessions/",
+  ".agentpolicy/state/overrides.jsonl",
+]);
+
+/**
+ * Normalize a .gitignore pattern for equivalence comparison. Handles
+ * the three common variant spellings that all mean the same ignore:
+ * a leading "/", a leading "./", and a trailing "/". Returned strings
+ * are not written back — they're only used as comparison keys when
+ * deciding whether an existing file already covers a requested entry.
+ */
+function normalizeIgnorePattern(pattern: string): string {
+  return pattern
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+}
+
+/**
  * Append the given entries to the repo's .gitignore if they are not
  * already present. Called by the init command when the human opted
  * into Aegis managing .gitignore during discovery (pending_actions.
@@ -486,9 +518,30 @@ export function updateGitignoreEntries(
 ): WriteOutcome | null {
   const gitignorePath = path.join(projectRoot, ".gitignore");
 
-  const wanted = Array.from(
+  // Allowlist gate — the LLM populates this list at extraction time
+  // and a drifted or hallucinated value could neuter the user's repo.
+  // Filter to the Aegis-sanctioned paths before touching the file,
+  // and surface any unsanctioned entries to stderr so prompt drift
+  // becomes visible rather than silent.
+  const requested = Array.from(
     new Set(entriesToEnsure.map((e) => e.trim()).filter((e) => e.length > 0))
   );
+  if (requested.length === 0) return null;
+
+  const wanted: string[] = [];
+  const rejected: string[] = [];
+  for (const entry of requested) {
+    if (AEGIS_SANCTIONED_GITIGNORE_PATHS.has(entry)) {
+      wanted.push(entry);
+    } else {
+      rejected.push(entry);
+    }
+  }
+  if (rejected.length > 0) {
+    process.stderr.write(
+      `[aegis] refused to add unsanctioned .gitignore entries from extraction: ${rejected.join(", ")}\n`
+    );
+  }
   if (wanted.length === 0) return null;
 
   let existing = "";
@@ -506,17 +559,20 @@ export function updateGitignoreEntries(
     };
   }
 
-  // Any non-comment, non-blank line counts as an existing ignore
-  // pattern — Aegis does not add a duplicate if another section of
-  // the file already has the same entry.
-  const existingLines = new Set(
+  // Normalize existing patterns for equivalence comparison so a
+  // pre-existing "/.agentpolicy/sessions/" or ".agentpolicy/sessions"
+  // entry prevents Aegis from adding an exact-spelling duplicate.
+  const existingNormalized = new Set(
     existing
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l.length > 0 && !l.startsWith("#"))
+      .map(normalizeIgnorePattern)
   );
 
-  const missing = wanted.filter((e) => !existingLines.has(e));
+  const missing = wanted.filter(
+    (e) => !existingNormalized.has(normalizeIgnorePattern(e))
+  );
   if (missing.length === 0) {
     return { path: ".gitignore", status: "unchanged" };
   }
@@ -525,6 +581,29 @@ export function updateGitignoreEntries(
     existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
   const block = `${separator}\n${AEGIS_GITIGNORE_HEADER}\n${missing.join("\n")}\n`;
   const updated = existing + block;
+
+  // Re-read immediately before the atomic rename to detect concurrent
+  // writes (a git hook, a concurrent editor, another aegis run if the
+  // lock was bypassed). If the file changed since our initial read,
+  // refuse to clobber the concurrent change — skipped is safer than
+  // silent loss of unrelated edits. Not a perfect race closer (the
+  // rename still happens slightly after this re-read) but the window
+  // shrinks from tens of milliseconds to microseconds.
+  let current = "";
+  try {
+    if (fs.existsSync(gitignorePath)) {
+      current = fs.readFileSync(gitignorePath, "utf-8");
+    }
+  } catch {
+    // Treat as missing — we'll create from scratch on rename
+  }
+  if (current !== existing) {
+    return {
+      path: ".gitignore",
+      status: "skipped",
+      reason: ".gitignore was modified during the update window — re-run aegis init to retry",
+    };
+  }
 
   try {
     writeFileAtomic(gitignorePath, updated);

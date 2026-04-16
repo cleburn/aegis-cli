@@ -26,12 +26,18 @@ function writeConfig(config: AegisConfig): void {
   // Explicit 0o700 on the Aegis directory so parent-directory access
   // also stays owner-only. mkdirSync ignores `mode` when the directory
   // already exists, which is why chmodSync follows — it re-hardens on
-  // every run, not just creation.
+  // every run, not just creation. Failure here is not fatal (the file
+  // chmod below is the critical barrier) but it IS surfaced to stderr
+  // so the user can notice a broken permission state on the parent
+  // directory instead of discovering it later.
   fs.mkdirSync(AEGIS_DIR, { recursive: true, mode: 0o700 });
   try {
     fs.chmodSync(AEGIS_DIR, 0o700);
-  } catch {
-    // Not a hard fail — the file chmod below is the critical barrier.
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    process.stderr.write(
+      `[aegis] warning: could not harden ~/.aegis directory permissions to 0700 (${msg}). The API key file itself is still 0600.\n`
+    );
   }
 
   // writeFileSync's `mode` option only applies on file creation; an
