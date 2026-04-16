@@ -454,3 +454,89 @@ function writeFileAtomic(
 function writeJSON(filePath: string, data: Record<string, unknown>): void {
   writeFileAtomic(filePath, JSON.stringify(data, null, 2) + "\n");
 }
+
+/**
+ * Marker line prefix used to delineate the block of entries Aegis
+ * adds to .gitignore. Exposed as a constant so future Aegis runs can
+ * detect their own block and update it in place rather than appending
+ * a new duplicate section every time.
+ */
+const AEGIS_GITIGNORE_HEADER = "# Aegis CLI — sensitive session output";
+
+/**
+ * Append the given entries to the repo's .gitignore if they are not
+ * already present. Called by the init command when the human opted
+ * into Aegis managing .gitignore during discovery (pending_actions.
+ * add_to_gitignore populated).
+ *
+ * Entries are trimmed to non-empty unique strings before processing.
+ * If every requested entry is already in the file (in any section),
+ * nothing is written and a WriteOutcome with "unchanged" status is
+ * returned. Otherwise the missing entries are appended under a named
+ * header block, the file is written atomically, and the outcome
+ * reports which entries were newly added.
+ *
+ * The function creates .gitignore if it doesn't exist; callers can
+ * infer whether the file was created or updated from the returned
+ * WriteOutcome.status.
+ */
+export function updateGitignoreEntries(
+  projectRoot: string,
+  entriesToEnsure: string[]
+): WriteOutcome | null {
+  const gitignorePath = path.join(projectRoot, ".gitignore");
+
+  const wanted = Array.from(
+    new Set(entriesToEnsure.map((e) => e.trim()).filter((e) => e.length > 0))
+  );
+  if (wanted.length === 0) return null;
+
+  let existing = "";
+  let existed = false;
+  try {
+    if (fs.existsSync(gitignorePath)) {
+      existing = fs.readFileSync(gitignorePath, "utf-8");
+      existed = true;
+    }
+  } catch (err) {
+    return {
+      path: ".gitignore",
+      status: "skipped",
+      reason: `could not read existing .gitignore: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+
+  // Any non-comment, non-blank line counts as an existing ignore
+  // pattern — Aegis does not add a duplicate if another section of
+  // the file already has the same entry.
+  const existingLines = new Set(
+    existing
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("#"))
+  );
+
+  const missing = wanted.filter((e) => !existingLines.has(e));
+  if (missing.length === 0) {
+    return { path: ".gitignore", status: "unchanged" };
+  }
+
+  const separator =
+    existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+  const block = `${separator}\n${AEGIS_GITIGNORE_HEADER}\n${missing.join("\n")}\n`;
+  const updated = existing + block;
+
+  try {
+    writeFileAtomic(gitignorePath, updated);
+    return {
+      path: ".gitignore",
+      status: existed ? "updated" : "created",
+    };
+  } catch (err) {
+    return {
+      path: ".gitignore",
+      status: "skipped",
+      reason: `could not write .gitignore: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+}

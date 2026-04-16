@@ -19,7 +19,12 @@ import { resolveApiKey } from "../config/api-key.js";
 import { AnthropicProvider } from "../llm/anthropic.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
-import { writePolicy, writeTranscript, type WriteOutcome } from "../policy/writer.js";
+import {
+  writePolicy,
+  writeTranscript,
+  updateGitignoreEntries,
+  type WriteOutcome,
+} from "../policy/writer.js";
 import {
   acquireLock,
   releaseLock,
@@ -112,6 +117,20 @@ export async function initCommand(): Promise<void> {
 
     if (result.status === "completed" && result.policy) {
       fileOutcomes = writePolicy(cwd, result.policy);
+
+      // Honor pending_actions.add_to_gitignore if the human opted in
+      // during discovery. The engine's system prompt gives Aegis three
+      // options to offer the user (inline update, defer to handoff,
+      // user-managed); this branch only runs when option 1 was
+      // selected and extraction populated the field. The resulting
+      // WriteOutcome is folded into the files-created manifest so the
+      // user sees exactly what was touched.
+      const gitignoreEntries = result.policy.pending_actions?.add_to_gitignore;
+      if (gitignoreEntries && gitignoreEntries.length > 0) {
+        const outcome = updateGitignoreEntries(cwd, gitignoreEntries);
+        if (outcome) fileOutcomes.push(outcome);
+      }
+
       ui.showFilesCreated(formatOutcomes(fileOutcomes));
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
       showNextSteps(ui, result.policy);

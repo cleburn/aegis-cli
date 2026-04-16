@@ -45,6 +45,18 @@ export interface DiscoveryResult {
     deployment_intent: "build_multi" | "build_single" | "govern";
     /** Custom handoff prompt crafted by the extraction LLM from the full conversation context */
     handoff_prompt: string;
+    /**
+     * Optional side-effects the human authorized during discovery but
+     * that extraction compiles into structured form. Currently used
+     * only for auto-appending sensitive Aegis paths to .gitignore
+     * when the human explicitly opted into Aegis doing it inline
+     * rather than deferring to the handoff or handling it manually.
+     * Absent or empty means no side effects beyond the standard
+     * policy writes.
+     */
+    pending_actions?: {
+      add_to_gitignore?: string[];
+    };
   } | null;
   /**
    * How the discovery conversation concluded.
