@@ -23,6 +23,7 @@ import {
   buildExtractionSystemPrompt,
   buildPostCompletionSystemPrompt,
 } from "./system-prompt.js";
+import { validatePolicyObject } from "../policy/validator.js";
 import type { TerminalUI } from "../ui/terminal.js";
 
 /** Maximum chained [READ_FILE: …] requests per single user turn. */
@@ -446,6 +447,32 @@ export class DiscoveryEngine {
           }
           this.ui.showError(
             "Extraction produced an incomplete result. Run aegis init again — sometimes the model needs a second pass."
+          );
+          return null;
+        }
+
+        // Schema-validate the extracted policy before returning. A
+        // pass here means writePolicy will accept it; a fail means
+        // we retry the extraction call rather than letting malformed
+        // policy reach disk.
+        const validationResults = validatePolicyObject({
+          constitution: policy.constitution,
+          governance: policy.governance,
+          roles: policy.roles,
+          ledger: policy.ledger,
+        });
+        const validationFailures = validationResults.filter((r) => !r.valid);
+        if (validationFailures.length > 0) {
+          if (attempt < MAX_ATTEMPTS) {
+            this.ui.showNote("Extraction produced invalid policy — retrying...");
+            continue;
+          }
+          const summary = validationFailures
+            .slice(0, 3)
+            .map((f) => `${f.file}: ${f.errors[0] ?? "invalid"}`)
+            .join("; ");
+          this.ui.showError(
+            `Extracted policy failed schema validation (${summary}). Run aegis init again.`
           );
           return null;
         }

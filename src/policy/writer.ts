@@ -11,12 +11,49 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { validatePolicyObject, ROLE_NAME_PATTERN } from "./validator.js";
 
 export interface PolicyFiles {
   constitution: Record<string, unknown>;
   governance: Record<string, unknown>;
   roles: Record<string, Record<string, unknown>>;
   ledger: Record<string, unknown>;
+}
+
+/**
+ * Error thrown when extracted policy fails schema validation. The
+ * message includes each failing file with its first validation error,
+ * so the caller can surface a specific reason rather than "something
+ * went wrong."
+ */
+export class PolicyValidationError extends Error {
+  readonly failures: Array<{ file: string; errors: string[] }>;
+  constructor(failures: Array<{ file: string; errors: string[] }>) {
+    const summary = failures
+      .map((f) => `${f.file}: ${f.errors[0] ?? "invalid"}`)
+      .join("; ");
+    super(`Policy validation failed: ${summary}`);
+    this.name = "PolicyValidationError";
+    this.failures = failures;
+  }
+}
+
+/**
+ * Sanitize a role name before using it as a filename. The extraction
+ * LLM is instructed to produce schema-compliant role names, but this
+ * is the last line of defense against a response that slipped through
+ * — a name like "../../etc/passwd" would escape roles/ entirely. Any
+ * input that does not match ROLE_NAME_PATTERN throws rather than being
+ * silently rewritten, so the caller knows extraction drifted.
+ */
+function sanitizedRoleFilename(roleName: string): string {
+  const base = path.basename(roleName).replace(/\.json$/i, "");
+  if (!ROLE_NAME_PATTERN.test(base)) {
+    throw new Error(
+      `Invalid role name "${roleName}" — must match ${ROLE_NAME_PATTERN}`
+    );
+  }
+  return `${base}.json`;
 }
 
 /**
@@ -41,6 +78,17 @@ export function writePolicy(
   projectRoot: string,
   policy: PolicyFiles
 ): string[] {
+  // Hard gate — refuse to write anything if the extracted policy
+  // fails schema validation or sanity checks. Throws PolicyValidationError
+  // so the caller can retry extraction or surface a specific message.
+  const validationResults = validatePolicyObject(policy);
+  const failures = validationResults.filter((r) => !r.valid);
+  if (failures.length > 0) {
+    throw new PolicyValidationError(
+      failures.map((f) => ({ file: f.file, errors: f.errors }))
+    );
+  }
+
   const policyDir = path.join(projectRoot, ".agentpolicy");
   const rolesDir = path.join(policyDir, "roles");
   const stateDir = path.join(policyDir, "state");
@@ -63,11 +111,14 @@ export function writePolicy(
   writeJSON(governancePath, policy.governance);
   written.push(".agentpolicy/governance.json");
 
-  // Write roles
+  // Write roles — filename sanitized even though validation already
+  // rejected bad names, because defense in depth matters when the
+  // filename is derived from LLM output.
   for (const [roleName, roleData] of Object.entries(policy.roles)) {
-    const rolePath = path.join(rolesDir, `${roleName}.json`);
+    const filename = sanitizedRoleFilename(roleName);
+    const rolePath = path.join(rolesDir, filename);
     writeJSON(rolePath, roleData);
-    written.push(`.agentpolicy/roles/${roleName}.json`);
+    written.push(`.agentpolicy/roles/${filename}`);
   }
 
   // Write ledger
