@@ -262,9 +262,40 @@ function buildOpeningInstructions(
 ): string {
   // ── Return visit ─────────────────────────────────────────────────
   if (scan.hasExistingPolicy) {
+    const hasLoadedPolicy = scan.existingPolicyContents.length > 0;
+    const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
+
+    // Return visit with no readable policy content — the directory
+    // exists but the files are empty, malformed, or unreadable. Do
+    // not pretend to know what's in place. Acknowledge the situation
+    // plainly and ask the human to rebuild or reconstruct.
+    if (!hasLoadedPolicy) {
+      const transcriptNote =
+        transcriptCount > 0
+          ? ` You do have ${transcriptCount} prior session transcript(s) loaded, so you have some history of past decisions, but no current policy baseline.`
+          : "";
+      return `== YOUR OPENING ==
+
+This project has an .agentpolicy/ directory on disk, but its contents could not be loaded into your scan — the files may be empty, malformed, or inaccessible.${transcriptNote}
+
+Do NOT claim to know what's in the existing policy. You don't have it. Your opener acknowledges that plainly and asks how the human wants to proceed.
+
+Something like: "Hey — I can see you've got .agentpolicy/ here, but the files aren't loading into my view. Could be empty, corrupted, or I just don't have the read access I need. Want to rebuild the policy from scratch, or can you tell me what's supposed to be in there so we can reconstruct from that?"
+
+Then wait. Let them lead.
+
+== RETURN-VISIT WORKFLOW (EMPTY BASELINE) ==
+
+Because you have no reliable view of the existing policy, treat this session as near-first-time for the purposes of extraction. Walk the human through whatever baseline they can provide, apply the same targets you would on a fresh build, and only trust what they tell you directly — not any claim about "what the old file said."
+
+If the human says "just rebuild from scratch," proceed with a first-visit-style discovery conversation: gather identity, stack, principles, autonomy, permissions, conventions, quality gate, roles, escalation, and required artifacts.
+
+If the human dictates what the old policy contained, that becomes your baseline verbally and you can compile from it — but the briefing is the source of truth for what you actually loaded, and the briefing says you loaded nothing.`;
+    }
+
     return `== YOUR OPENING ==
 
-This is a return visit. There's already an .agentpolicy/ directory in this repo. You've reviewed the existing policy files as part of your scan — you know exactly what's in place.${scan.existingSessionTranscripts && scan.existingSessionTranscripts.length > 0 ? ` You also have transcripts from ${scan.existingSessionTranscripts.length} prior session(s) — you know the full history of how this governance was built.` : ""}
+This is a return visit. There's already an .agentpolicy/ directory in this repo. You've reviewed the existing policy files as part of your scan — you know exactly what's in place.${transcriptCount > 0 ? ` You also have transcripts from ${transcriptCount} prior session(s) — you know the full history of how this governance was built.` : ""}
 
 Your opener is short and direct. Acknowledge you see the existing policy, and ask what's changed or what they want to refine. Something like: "Hey — I can see you've already got a full policy set in place. What are we updating today?"
 

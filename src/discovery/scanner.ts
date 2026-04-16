@@ -1284,16 +1284,24 @@ export function formatScanBriefing(scan: ScanResult): string {
 
   // Scan-mode indicator — describes what was actually read into the
   // prompt so the model doesn't claim knowledge it lacks or believe
-  // claims the briefing makes about itself. Return visits are a
-  // distinct scope: policy files + prior transcripts + HIGH_VALUE_FILES
-  // are read, but the wider repo is intentionally NOT in the prompt
-  // unless the conversation surfaces something specific. Reporting
-  // the tier here on a return visit would contradict reality (large
-  // return-visit repos can land in the "massive" tier even though
-  // policy and transcripts were read in full).
-  if (scan.hasExistingPolicy) {
+  // claims the briefing makes about itself. Three return-visit
+  // subcases matter because hasExistingPolicy only says the directory
+  // exists — a present-but-empty or unreadable .agentpolicy/ must
+  // not be described as "policy contents loaded" in the prompt.
+  const hasLoadedPolicy = scan.existingPolicyContents.length > 0;
+  const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
+
+  if (scan.hasExistingPolicy && hasLoadedPolicy) {
     lines.push(
       `Scan mode: return visit — focused read of .agentpolicy/ contents, prior session transcripts, and HIGH_VALUE_FILES. The rest of the repo is not part of this prompt's context unless you and the user discuss it.`
+    );
+  } else if (scan.hasExistingPolicy) {
+    const transcriptNote =
+      transcriptCount > 0
+        ? ` ${transcriptCount} prior session transcript(s) did load.`
+        : "";
+    lines.push(
+      `Scan mode: return visit, but no readable .agentpolicy/ content was loaded — the directory exists on disk but its files are empty, malformed, or unreadable.${transcriptNote} Treat as near-first-time for baseline context; do not claim knowledge of an existing policy you cannot see.`
     );
   } else if (scan.scanTier === "massive") {
     const mb = (scan.scanByteSize / 1024 / 1024).toFixed(1);
