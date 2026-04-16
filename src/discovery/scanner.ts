@@ -655,6 +655,13 @@ function detectScanTier(
   const thresholds = resolveTierThresholds();
   const forced = resolveForcedTier();
 
+  // Forced massive skips enumeration entirely — the whole point of the
+  // escape hatch is "don't walk this tree." Counts are zeroed; the
+  // briefing will note the mode is forced.
+  if (forced === "massive") {
+    return { tier: "massive", fileCount: 0, byteSize: 0, fileCounts: {} };
+  }
+
   let candidates: string[] = [];
   try {
     candidates = glob.sync("**/*", {
@@ -945,14 +952,6 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       priorityFiles.push(relativePath);
     } else {
       discoveredFiles.push(relativePath);
-    }
-  }
-
-  // Pick up high-value dotfiles that glob may have missed at root
-  for (const hvFile of HIGH_VALUE_FILES) {
-    const fullPath = path.join(projectRoot, hvFile);
-    if (fs.existsSync(fullPath) && !priorityFiles.includes(hvFile)) {
-      priorityFiles.push(hvFile);
     }
   }
 
