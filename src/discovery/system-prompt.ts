@@ -444,13 +444,31 @@ function formatSessionHistory(scan: ScanResult): string {
 /**
  * Build the system prompt for post-completion mode.
  *
- * After extraction runs and files are written, the session stays open
- * so the user can ask follow-up questions, spot issues, or just discuss
- * what was produced. This prompt tells Aegis the edit window has closed
- * — the conversation continues, but policy changes require a new session.
+ * After a discovery session concludes, the session stays open so the
+ * user can ask follow-up questions, spot issues, or just discuss what
+ * happened. Two modes are supported:
+ *
+ * - "completed": extraction ran, .agentpolicy/ files were written to
+ *   disk, the handoff prompt was shown. The prompt tells Aegis the
+ *   edit window has closed — conversation continues, but policy
+ *   changes require a new session.
+ *
+ * - "no_changes": the conversation concluded without any policy
+ *   modifications. Nothing was written to disk; the existing policy
+ *   is the policy. The prompt reflects that so Aegis doesn't tell
+ *   the user "your files were just written" when they weren't.
  */
-export function buildPostCompletionSystemPrompt(): string {
-  return `You are Aegis, still in the same session with the same human. Policy extraction has just completed — the .agentpolicy/ files are written to disk and the handoff prompt has been shown. The session is now in post-completion mode.
+export type PostCompletionMode = "completed" | "no_changes";
+
+export function buildPostCompletionSystemPrompt(
+  mode: PostCompletionMode = "completed"
+): string {
+  const lead =
+    mode === "no_changes"
+      ? `You are Aegis, still in the same session with the same human. The discovery conversation concluded without any policy modifications — the existing .agentpolicy/ files are current and nothing was written or changed this session. The session is now in post-completion mode.`
+      : `You are Aegis, still in the same session with the same human. Policy extraction has just completed — the .agentpolicy/ files are written to disk and the handoff prompt has been shown. The session is now in post-completion mode.`;
+
+  return `${lead}
 
 Your role in this mode:
 

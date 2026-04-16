@@ -22,6 +22,7 @@ import {
   buildDiscoverySystemPrompt,
   buildExtractionSystemPrompt,
   buildPostCompletionSystemPrompt,
+  type PostCompletionMode,
 } from "./system-prompt.js";
 import { validatePolicyObject } from "../policy/validator.js";
 import { repoHasRealSource } from "./scanner.js";
@@ -391,7 +392,10 @@ export class DiscoveryEngine {
    * policy edits: just continued conversation that gets captured in the
    * same transcript.
    */
-  async continueConversation(userInput: string): Promise<string> {
+  async continueConversation(
+    userInput: string,
+    mode: PostCompletionMode = "completed"
+  ): Promise<string> {
     this.messages.push({ role: "user", content: userInput });
 
     this.ui.startThinking();
@@ -399,7 +403,7 @@ export class DiscoveryEngine {
     let firstToken = true;
     const response = await this.provider.chatStream(
       this.messages,
-      buildPostCompletionSystemPrompt(),
+      buildPostCompletionSystemPrompt(mode),
       (token) => {
         if (firstToken) {
           this.ui.stopThinking();

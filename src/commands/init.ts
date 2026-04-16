@@ -95,27 +95,39 @@ export async function initCommand(): Promise<void> {
 
     const result = await engine.run();
 
-    // Write policy if changes were made — skip if conversation
-    // concluded with no modifications needed
+    // Branch on how discovery concluded:
+    //
+    // - "completed": user affirmed changes AND extraction produced a
+    //   valid policy. Write files, show handoff, enter post-completion.
+    // - "no_changes": user affirmed nothing needs to change. No files
+    //   written. Post-completion runs with a different system prompt
+    //   so Aegis doesn't claim files were written that weren't.
+    // - "extraction_failed": user affirmed changes but extraction
+    //   returned null after retries. Do NOT enter post-completion —
+    //   its prompt would tell Aegis "extraction has just completed"
+    //   and the user would get a session that lies about what
+    //   happened. Surface the error and fall through to transcript
+    //   write + non-zero exit.
     let fileOutcomes: WriteOutcome[] = [];
-    if (result.policy) {
-      fileOutcomes = writePolicy(cwd, result.policy);
+    let extractionFailed = false;
 
+    if (result.status === "completed" && result.policy) {
+      fileOutcomes = writePolicy(cwd, result.policy);
       ui.showFilesCreated(formatOutcomes(fileOutcomes));
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
-
-      // ── Next Steps ───────────────────────────────────────────────
       showNextSteps(ui, result.policy);
+      await runPostCompletionLoop(ui, engine, "completed");
+    } else if (result.status === "no_changes") {
+      await runPostCompletionLoop(ui, engine, "no_changes");
+    } else {
+      // status === "extraction_failed" — error was already surfaced by
+      // extractPolicy via ui.showError. Skip post-completion entirely;
+      // the session is not a success and should not pretend to be one.
+      extractionFailed = true;
+      ui.showNote(
+        "Session transcript will still be saved for reference. Run aegis init again when you're ready to retry."
+      );
     }
-
-    // ── Post-completion loop ────────────────────────────────────────
-    //
-    // The session stays open after extraction. The user can ask
-    // follow-up questions, spot issues, or just discuss what was
-    // produced. Policy edits require a new `aegis init` — Aegis
-    // explains this when asked. The session ends when the user types
-    // /exit, /quit, or /done.
-    await runPostCompletionLoop(ui, engine);
 
     // ── Final transcript write ──────────────────────────────────────
     //
@@ -147,6 +159,16 @@ export async function initCommand(): Promise<void> {
 
     const transcriptPath = writeTranscript(cwd, transcriptEntries);
     ui.showNote(`Session transcript saved: ${transcriptPath}`);
+
+    // Extraction failure surfaces as a non-zero exit after the
+    // transcript is preserved, so shell callers (CI, scripts, the
+    // user's shell status) see that the session didn't succeed even
+    // though the audit record was captured. Process.exit instead of
+    // throw so ui.destroy in the finally block still runs.
+    if (extractionFailed) {
+      await ui.destroy();
+      process.exit(1);
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes("SIGINT")) {
       console.log("\n");
@@ -214,7 +236,8 @@ function showNextSteps(
  */
 async function runPostCompletionLoop(
   ui: TerminalUI,
-  engine: DiscoveryEngine
+  engine: DiscoveryEngine,
+  mode: "completed" | "no_changes"
 ): Promise<void> {
   ui.showAegisMessage(
     "If there are no more questions, type /exit to end this session. Otherwise, let me know what's on your mind."
@@ -237,7 +260,7 @@ async function runPostCompletionLoop(
       continue;
     }
 
-    await engine.continueConversation(input);
+    await engine.continueConversation(input, mode);
   }
 }
 
