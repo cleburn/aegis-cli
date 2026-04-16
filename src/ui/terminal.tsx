@@ -39,7 +39,7 @@ const HEADER_RULE_WIDTH = 73;
 
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
-const POWERED_BY = "Claude Opus 4.6";
+const POWERED_BY = "Claude Opus 4.7";
 const UPDATE_COMMAND = "npm install -g aegis-cli@latest";
 
 const COMMANDS: Array<{ name: string; description: string }> = [

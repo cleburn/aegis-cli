@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { LLMProvider, Message } from "./provider.js";
 
-const MODEL = "claude-opus-4-6";
-const MAX_TOKENS = 8192;
+const MODEL = "claude-opus-4-7";
+const MAX_TOKENS = 16384;
 const MAX_TOKENS_JSON = 128000;
 
 export class AnthropicProvider implements LLMProvider {
