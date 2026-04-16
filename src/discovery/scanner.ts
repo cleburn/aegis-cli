@@ -488,6 +488,45 @@ export async function readFileSafe(
 }
 
 /**
+ * Read a prior Aegis session transcript without the 10KB truncation
+ * cap that general scan files use. Session files are produced by
+ * this CLI itself, so we know the content shape (JSON transcript)
+ * and we need the full conversation verbatim on return visits — a
+ * silent mid-file cut would make the "pick up where you left off"
+ * contract a lie. The 1MB absolute ceiling still applies as a safety
+ * floor against pathological cases; oversize transcripts return a
+ * distinct marker so the caller can surface a placeholder instead of
+ * dropping the session silently.
+ */
+export const OVERSIZE_SESSION = Symbol("oversize-session");
+
+export interface OversizeSessionInfo {
+  readonly marker: typeof OVERSIZE_SESSION;
+  readonly size: number;
+}
+
+export async function readSessionTranscript(
+  filePath: string
+): Promise<FileContent | null | OversizeSessionInfo> {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    if (stat.size > MAX_FILE_SIZE_ABSOLUTE) {
+      return { marker: OVERSIZE_SESSION, size: stat.size };
+    }
+    const content = fs.readFileSync(filePath, "utf-8");
+    return {
+      path: "", // caller sets this to the relative path
+      content,
+      truncated: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check if a relative file path matches sensitive patterns.
  */
 export function isSensitiveFile(relativePath: string): boolean {
@@ -818,6 +857,13 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   }
 
   // ── Session transcripts ──────────────────────────────────────────
+  // Load prior session transcripts verbatim via readSessionTranscript,
+  // which skips the 10KB cap that readFileSafe applies to general scan
+  // files. The "pick up where you left off" contract requires full
+  // conversation history, not a truncated preview. A transcript over
+  // the 1MB safety ceiling is surfaced as a placeholder entry so the
+  // LLM and the user both see that a session existed but could not
+  // be loaded in full.
   const existingSessionTranscripts: FileContent[] = [];
   const sessionsDir = path.join(policyDir, "sessions");
   if (hasExistingPolicy && fs.existsSync(sessionsDir)) {
@@ -825,11 +871,20 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       const sessionFiles = glob.sync("*.json", { cwd: sessionsDir }).sort();
       for (const sessionFile of sessionFiles) {
         const fullPath = path.join(sessionsDir, sessionFile);
-        const content = await readFileSafe(fullPath);
-        if (content && typeof content !== "symbol") {
-          content.path = `.agentpolicy/sessions/${sessionFile}`;
-          existingSessionTranscripts.push(content);
+        const result = await readSessionTranscript(fullPath);
+        if (!result) continue;
+        if ("marker" in result && result.marker === OVERSIZE_SESSION) {
+          const mb = (result.size / 1024 / 1024).toFixed(1);
+          existingSessionTranscripts.push({
+            path: `.agentpolicy/sessions/${sessionFile}`,
+            content: `[Session transcript omitted — file size ${mb}MB exceeds the 1MB ceiling. Open the file directly if this history is needed.]`,
+            truncated: true,
+          });
+          continue;
         }
+        const content = result as FileContent;
+        content.path = `.agentpolicy/sessions/${sessionFile}`;
+        existingSessionTranscripts.push(content);
       }
     } catch {
       // Can't read sessions
