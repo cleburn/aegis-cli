@@ -675,13 +675,20 @@ function isNoChangeConfirmation(userInput: string): boolean {
     "actually", "but ", "wait", "hmm ", "except", "however",
     // Add-on connectors indicating a new instruction follows
     "also ", "plus ", "oh and ", "one more", "one thing", "additionally",
-    // Imperative verbs for direct policy edits
+    // Imperative verbs for direct policy edits — all space-suffixed
+    // so past-tense and gerund forms (updated, changing) don't trip
+    // the blocker for legitimate no-change statements.
     "add ", "remove ", "change ", "update ", "modify ", "include ",
     "delete ", "fix ", "create ", "set ", "switch ",
-    // Deliverable regeneration verbs — user wants output produced
+    "adjust ", "tweak ", "revise ", "refactor ", "tune ",
+    // Deliverable regeneration verbs — user wants output produced.
+    // "extract " is space-suffixed on purpose so it matches the verb
+    // form but not nouns like "extraction" or "extracted" (the second
+    // of which Codex flagged as over-matching in the previous pass).
     "refresh", "regenerate", "re-extract", "reextract",
     "rewrite", "rebuild", "redo", "re-run", "rerun",
-    "extract",
+    "generate ", "produce ",
+    "extract ",
   ];
   if (blockers.some((w) => trimmed.includes(w))) return false;
 
