@@ -477,10 +477,19 @@ export class DiscoveryEngine {
           return null;
         }
 
-        // Default deployment_intent if extraction didn't produce one
+        // Default deployment_intent if extraction didn't produce one.
+        // Return visits default to "govern" — the project already has
+        // a policy directory, so a missing intent on a return visit
+        // should never produce a build-from-scratch handoff. Only
+        // first-time runs infer build_single or build_multi from the
+        // shape of the roles set.
         if (!policy.deployment_intent) {
-          const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
-          policy.deployment_intent = roleNames.length > 0 ? "build_multi" : "build_single";
+          if (this.scan.hasExistingPolicy) {
+            policy.deployment_intent = "govern";
+          } else {
+            const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
+            policy.deployment_intent = roleNames.length > 0 ? "build_multi" : "build_single";
+          }
         }
 
         // Default handoff_prompt if extraction didn't produce one

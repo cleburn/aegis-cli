@@ -132,7 +132,11 @@ export async function initCommand(): Promise<void> {
         content: JSON.stringify({
           type: "session_closing",
           files: fileOutcomes,
-          policy_path: `${cwd}/.agentpolicy/`,
+          // Use the project-relative path so the absolute filesystem
+          // location — which embeds the user's home directory — never
+          // lands in the transcript (which gets re-read into the
+          // discovery prompt on return visits).
+          policy_path: ".agentpolicy/",
           handoff_prompt: result.policy.handoff_prompt,
           deployment_intent: result.policy.deployment_intent,
           mcp_install: "npm install -g aegis-mcp-server",
