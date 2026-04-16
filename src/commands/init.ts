@@ -26,6 +26,7 @@ import {
   registerExitCleanup,
   LockConflictError,
 } from "../policy/lock.js";
+import { AegisExit } from "../abort.js";
 import { TerminalUI } from "../ui/terminal.js";
 
 // Read version from package.json so the banner stays in sync with publishes.
@@ -57,9 +58,7 @@ export async function initCommand(): Promise<void> {
     registerExitCleanup(lockPath);
   } catch (err) {
     if (err instanceof LockConflictError) {
-      ui.showError(err.message);
-      await ui.destroy();
-      process.exit(1);
+      throw new AegisExit(1, err.message);
     }
     throw err;
   }
@@ -73,10 +72,10 @@ export async function initCommand(): Promise<void> {
     // Validate API key quietly
     const valid = await provider.validate();
     if (!valid) {
-      ui.showError(
+      throw new AegisExit(
+        1,
         "Couldn't connect with that API key. Check that it's valid and try again."
       );
-      process.exit(1);
     }
 
     // Scan the repo quietly — Aegis does his homework before the meeting
@@ -163,25 +162,56 @@ export async function initCommand(): Promise<void> {
     // Extraction failure surfaces as a non-zero exit after the
     // transcript is preserved, so shell callers (CI, scripts, the
     // user's shell status) see that the session didn't succeed even
-    // though the audit record was captured. Process.exit instead of
-    // throw so ui.destroy in the finally block still runs.
+    // though the audit record was captured. Use process.exitCode so
+    // the finally block runs fully before the process exits — a
+    // direct process.exit here would cut ui.destroy's async flush
+    // short.
     if (extractionFailed) {
-      await ui.destroy();
-      process.exit(1);
+      process.exitCode = 1;
     }
   } catch (error) {
-    if (error instanceof Error && error.message.includes("SIGINT")) {
-      console.log("\n");
-      ui.showNote("Interrupted. Run aegis init again anytime.");
-      process.exit(0);
+    // AegisExit is the typed-abort path: deep code throws it with a
+    // user-facing message and an exit code, and the outer handler is
+    // the single place that knows how to surface the message and
+    // run cleanup. Every fatal message goes to stderr first (works
+    // before Ink mounts and when Ink fails to mount) and then to
+    // ui.showError as a best-effort second layer.
+    if (error instanceof AegisExit) {
+      if (error.userMessage) {
+        process.stderr.write(`${error.userMessage}\n`);
+        try {
+          ui.showError(error.userMessage);
+        } catch {
+          // UI couldn't render — stderr already carried the message
+        }
+      }
+      process.exitCode = error.code;
+    } else if (error instanceof Error && error.message.includes("SIGINT")) {
+      // Legacy SIGINT detection retained as a defensive catch for
+      // libraries that throw errors with this shape. The primary
+      // signal path is lock.ts's signal handlers.
+      process.stderr.write("\nInterrupted. Run aegis init again anytime.\n");
+      try {
+        ui.showNote("Interrupted. Run aegis init again anytime.");
+      } catch {
+        // UI couldn't render — stderr already carried the message
+      }
+      process.exitCode = 0;
+    } else {
+      const msg = error instanceof Error ? error.message : "Something went wrong.";
+      process.stderr.write(`${msg}\n`);
+      try {
+        ui.showError(msg);
+      } catch {
+        // UI couldn't render — stderr already carried the message
+      }
+      process.exitCode = 1;
     }
-    ui.showError(
-      error instanceof Error ? error.message : "Something went wrong."
-    );
-    process.exit(1);
   } finally {
     // Release the lock synchronously first so it happens even if
-    // ui.destroy() is cut short by a process.exit further up.
+    // ui.destroy() is cut short. Node exits with process.exitCode
+    // after the event loop drains; Ink's waitUntilExit hook in
+    // terminal.tsx respects process.exitCode rather than hardcoding 0.
     if (lockPath) releaseLock(lockPath);
     await ui.destroy();
   }

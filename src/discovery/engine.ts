@@ -26,6 +26,7 @@ import {
 } from "./system-prompt.js";
 import { validatePolicyObject } from "../policy/validator.js";
 import { repoHasRealSource } from "./scanner.js";
+import { AegisExit } from "../abort.js";
 import type { TerminalUI } from "../ui/terminal.js";
 
 /** Maximum chained [READ_FILE: …] requests per single user turn. */
@@ -88,15 +89,17 @@ export class DiscoveryEngine {
     while (true) {
       const userInput = await this.ui.getUserInput();
 
-      // Handle exits gracefully
+      // Handle exits gracefully via the typed-exit path so the outer
+      // init command's cleanup runs (lock release, UI destroy). A bare
+      // process.exit here would bypass that.
       if (
         userInput.toLowerCase() === "/quit" ||
         userInput.toLowerCase() === "/exit"
       ) {
-        this.ui.showNote(
+        throw new AegisExit(
+          0,
           "No worries — nothing saved yet, but you can pick this up anytime with aegis init."
         );
-        process.exit(0);
       }
 
       if (userInput.trim() === "") {

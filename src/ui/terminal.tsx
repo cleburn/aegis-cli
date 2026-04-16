@@ -522,10 +522,15 @@ export class TerminalUI {
         { exitOnCtrlC: true }
       );
       this.inkInstance = instance;
+      // Respect any exit code the outer command already decided on.
+      // initCommand's error path sets process.exitCode before finally
+      // runs ui.destroy — if we hardcoded 0/1 here, we would override
+      // that signal and show the shell a success (or a generic 1)
+      // regardless of what actually happened.
       instance
         .waitUntilExit()
-        .then(() => process.exit(0))
-        .catch(() => process.exit(1));
+        .then(() => process.exit(process.exitCode ?? 0))
+        .catch(() => process.exit(process.exitCode ?? 1));
     }
   }
 
@@ -640,6 +645,11 @@ export class TerminalUI {
       // items added to <Static>) before tearing down the component tree.
       await sleep(500);
       this.inkInstance.unmount();
+      // Idempotent — the init command's catch path may call destroy
+      // explicitly before falling through to the finally block, which
+      // calls it again. Clearing the instance here makes the second
+      // call a no-op rather than an unmount-on-unmounted error.
+      this.inkInstance = null;
     }
   }
 }

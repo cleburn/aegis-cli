@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as readline from "node:readline";
+import { AegisExit } from "../abort.js";
 
 const AEGIS_DIR = path.join(os.homedir(), ".aegis");
 const CONFIG_PATH = path.join(AEGIS_DIR, "config.json");
@@ -29,7 +30,7 @@ function writeConfig(config: AegisConfig): void {
 }
 
 function prompt(question: string, hidden = false): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -44,19 +45,30 @@ function prompt(question: string, hidden = false): Promise<string> {
         stdin.setRawMode(true);
       }
       let input = "";
+      // Shared cleanup for both success and abort paths so raw mode
+      // and the stdin data listener never leak when the prompt ends.
+      // Without this, a Ctrl+C during the hidden prompt would leave
+      // the shell in raw mode after process.exit.
+      const teardown = (): void => {
+        stdin.removeListener("data", onData);
+        if (stdin.isTTY && wasRaw !== undefined) {
+          stdin.setRawMode(wasRaw);
+        }
+        rl.close();
+      };
       const onData = (char: Buffer) => {
         const c = char.toString();
         if (c === "\n" || c === "\r") {
-          stdin.removeListener("data", onData);
-          if (stdin.isTTY && wasRaw !== undefined) {
-            stdin.setRawMode(wasRaw);
-          }
+          teardown();
           process.stdout.write("\n");
-          rl.close();
           resolve(input);
         } else if (c === "\u0003") {
-          // Ctrl+C
-          process.exit(0);
+          // Ctrl+C — restore terminal and abort via typed exit so
+          // init's outer handler can do full cleanup (lock release,
+          // transcript write if applicable) before the process ends.
+          teardown();
+          process.stdout.write("\n");
+          reject(new AegisExit(130, "API key entry canceled."));
         } else if (c === "\u007F" || c === "\b") {
           // Backspace
           if (input.length > 0) {
@@ -104,8 +116,7 @@ export async function resolveApiKey(): Promise<string> {
   const key = await prompt("  API key: ", true);
 
   if (!key || !key.startsWith("sk-")) {
-    console.error("\n  That doesn't look like a valid Anthropic API key.");
-    process.exit(1);
+    throw new AegisExit(1, "That doesn't look like a valid Anthropic API key.");
   }
 
   const saveChoice = await prompt(
