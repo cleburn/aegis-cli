@@ -38,6 +38,15 @@ export interface WriteOutcome {
   status: WriteStatus;
   /** Populated when status is "skipped" — explains why the operation didn't complete. */
   reason?: string;
+  /**
+   * Structured list of file basenames the outcome refers to. Used by
+   * the reconciliation-aborted summary so the audit trail retains the
+   * full candidate set without inlining it into the human-readable
+   * `reason` string (which would bloat the terminal line and the
+   * transcript payload when the list is long). Consumers that want
+   * the full list read from here; display code reads `reason`.
+   */
+  candidates?: string[];
 }
 
 /**
@@ -242,7 +251,8 @@ export function writePolicy(
       outcomes.push({
         path: ".agentpolicy/roles/",
         status: "skipped",
-        reason: `reconciliation aborted — could not canonicalize newly written roles; ${candidates.length} role file(s) left untouched (candidates: ${candidates.join(", ")})`,
+        reason: `reconciliation aborted — could not canonicalize newly written roles; ${candidates.length} role file(s) left untouched`,
+        candidates,
       });
     }
   }
