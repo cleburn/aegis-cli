@@ -285,15 +285,29 @@ const SAFE_ENV_PATTERNS: RegExp[] = [
  * less-popular languages.
  */
 const SOURCE_FILE_EXTENSIONS = new Set<string>([
+  // Mainstream general-purpose
   ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
   ".rs", ".go", ".java", ".kt", ".scala", ".groovy",
   ".rb", ".php", ".swift", ".m", ".mm",
   ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
   ".cs", ".fs", ".fsx", ".vb",
+  // Shell + scripting
   ".sh", ".bash", ".zsh", ".fish",
+  ".ps1", ".psm1", ".psd1",
+  ".bat", ".cmd",
   ".pl", ".pm", ".lua", ".tcl",
+  // Functional + academic
   ".hs", ".ml", ".mli", ".ex", ".exs", ".elm", ".clj", ".cljs", ".cljc",
-  ".erl", ".hrl", ".jl", ".r", ".dart",
+  ".erl", ".hrl", ".jl", ".r",
+  // Data science + notebooks
+  ".ipynb", ".rmd",
+  // Mobile + web component
+  ".dart", ".vue", ".svelte",
+  // C# web
+  ".razor", ".cshtml",
+  // Database
+  ".sql",
+  // Emerging / niche
   ".sol", ".zig", ".nim", ".cr", ".v",
 ]);
 
@@ -1268,9 +1282,20 @@ export function formatScanBriefing(scan: ScanResult): string {
     lines.push(`Description: ${scan.projectDescription}`);
   }
 
-  // Tier indicator — flags when the briefing is shallow so the model
-  // doesn't pretend to have read files it didn't.
-  if (scan.scanTier === "massive") {
+  // Scan-mode indicator — describes what was actually read into the
+  // prompt so the model doesn't claim knowledge it lacks or believe
+  // claims the briefing makes about itself. Return visits are a
+  // distinct scope: policy files + prior transcripts + HIGH_VALUE_FILES
+  // are read, but the wider repo is intentionally NOT in the prompt
+  // unless the conversation surfaces something specific. Reporting
+  // the tier here on a return visit would contradict reality (large
+  // return-visit repos can land in the "massive" tier even though
+  // policy and transcripts were read in full).
+  if (scan.hasExistingPolicy) {
+    lines.push(
+      `Scan mode: return visit — focused read of .agentpolicy/ contents, prior session transcripts, and HIGH_VALUE_FILES. The rest of the repo is not part of this prompt's context unless you and the user discuss it.`
+    );
+  } else if (scan.scanTier === "massive") {
     const mb = (scan.scanByteSize / 1024 / 1024).toFixed(1);
     lines.push(
       `Scan mode: massive tier (${scan.scanFileCount}+ files, ${mb}MB) — metadata only, no file contents read.`
