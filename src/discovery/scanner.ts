@@ -277,6 +277,44 @@ const SAFE_ENV_PATTERNS: RegExp[] = [
 ];
 
 /**
+ * File extensions that indicate actual source code, used by the
+ * deployment_intent maturity heuristic in extractPolicy. A repo with
+ * any of these — even without a recognized language config file —
+ * counts as a real codebase, not a skeletal hand-authored policy.
+ * Kept liberal to cover common stacks including shell scripts and
+ * less-popular languages.
+ */
+const SOURCE_FILE_EXTENSIONS = new Set<string>([
+  ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs",
+  ".rs", ".go", ".java", ".kt", ".scala", ".groovy",
+  ".rb", ".php", ".swift", ".m", ".mm",
+  ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
+  ".cs", ".fs", ".fsx", ".vb",
+  ".sh", ".bash", ".zsh", ".fish",
+  ".pl", ".pm", ".lua", ".tcl",
+  ".hs", ".ml", ".mli", ".ex", ".exs", ".elm", ".clj", ".cljs", ".cljc",
+  ".erl", ".hrl", ".jl", ".r", ".dart",
+  ".sol", ".zig", ".nim", ".cr", ".v",
+]);
+
+/**
+ * True when the scanned repo looks like an actual codebase rather
+ * than a skeletal project with only policy or documentation. Checks
+ * both the config-driven stack detectors (languages, frameworks,
+ * infrastructure) and the raw file-extension tally so a repo made
+ * of root-level scripts with no config still registers as mature.
+ */
+export function repoHasRealSource(scan: ScanResult): boolean {
+  if (scan.languages.length > 0) return true;
+  if (scan.frameworks.length > 0) return true;
+  if (scan.infrastructure.length > 0) return true;
+  for (const ext of Object.keys(scan.fileCounts)) {
+    if (SOURCE_FILE_EXTENSIONS.has(ext)) return true;
+  }
+  return false;
+}
+
+/**
  * Directories and artifacts that should never enter the scan. Shared
  * between the tier pre-scan and the full discovery glob so both views
  * see the same candidate set.
@@ -488,17 +526,19 @@ export async function readFileSafe(
 }
 
 /**
- * Upper bound on the size of a session transcript we will read in
- * full. Session transcripts are produced by this CLI itself, so in
- * practice a legitimate file is a few tens of KB. 100MB is a sanity
- * ceiling against a pathological or hostile file tricking us into
- * loading gigabytes into memory; it has no bearing on the LLM's
- * context budget, which is the actual practical limit. Anything
- * under this ceiling is loaded verbatim — the product contract is
- * "prior transcripts verbatim" and we honor it for every realistic
- * session size.
+ * Prompt-ingestion ceiling for a single session transcript. A normal
+ * aegis init produces a file in the tens-of-KB range; a very long
+ * power-user session might reach 1-2MB. Anything beyond this is
+ * almost certainly either a tampered file or an accidental paste of
+ * bulk data, and either way it should not be reserialized and
+ * injected into the discovery prompt — doing so would spike memory
+ * and bloat the request. 5MB leaves generous headroom over every
+ * realistic session while keeping the worst-case prompt overhead
+ * bounded. Oversize files are preserved on disk for audit; they
+ * just get a placeholder entry in the prompt instead of being
+ * loaded wholesale.
  */
-const MAX_SESSION_TRANSCRIPT_SIZE = 100 * 1024 * 1024;
+const MAX_SESSION_TRANSCRIPT_SIZE = 5 * 1024 * 1024;
 
 export const OVERSIZE_SESSION = Symbol("oversize-session");
 
@@ -957,7 +997,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
           const mb = (result.size / 1024 / 1024).toFixed(1);
           existingSessionTranscripts.push({
             path: `.agentpolicy/sessions/${sessionFile}`,
-            content: `[Session transcript omitted — file size ${mb}MB exceeds the safety ceiling. Open the file directly if this history is needed.]`,
+            content: `[Session transcript omitted — file size ${mb}MB exceeds the 5MB prompt-ingestion limit. Transcript is preserved on disk for audit; open the file directly if this history is needed.]`,
             truncated: true,
           });
           continue;
@@ -997,9 +1037,14 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   // twice. Skipped on return visits — the tree wasn't read in full for
   // content on return anyway, and tier gating adds no value when the
   // policy files and transcripts already carry the context.
-  const tierResult = hasExistingPolicy
-    ? { tier: "normal" as ScanTier, fileCount: 0, byteSize: 0, fileCounts: {} as Record<string, number> }
-    : detectScanTier(projectRoot, isIgnored);
+  // detectScanTier runs on every invocation, including return visits.
+  // Return visits don't need the tier for file-read gating (they only
+  // ever read HIGH_VALUE_FILES), but they DO benefit from the real
+  // file-count and extension-tally data downstream: the briefing shows
+  // real numbers instead of zeros, and the deployment_intent fallback
+  // in extractPolicy inspects scan.fileCounts to decide whether a
+  // return-visit project is substantial enough to govern.
+  const tierResult = detectScanTier(projectRoot, isIgnored);
   const scanTier = tierResult.tier;
   const fileCounts = tierResult.fileCounts;
 

@@ -24,6 +24,7 @@ import {
   buildPostCompletionSystemPrompt,
 } from "./system-prompt.js";
 import { validatePolicyObject } from "../policy/validator.js";
+import { repoHasRealSource } from "./scanner.js";
 import type { TerminalUI } from "../ui/terminal.js";
 
 /** Maximum chained [READ_FILE: …] requests per single user turn. */
@@ -479,18 +480,14 @@ export class DiscoveryEngine {
 
         // Default deployment_intent if extraction didn't produce one.
         // "govern" only fits when the project both has existing policy
-        // AND shows signs of real work — source tree, framework setup,
-        // CI config, or any top-level code directory. A skeletal repo
-        // with only a hand-authored .agentpolicy/ on it should still
-        // fall through to a build handoff; otherwise the agent gets
-        // told to "govern" a project with nothing to govern yet.
+        // AND actually contains source code. repoHasRealSource checks
+        // the config-driven stack detectors AND the raw file-extension
+        // tally, so a Makefile-style repo with just main.py at the
+        // root still registers as mature, while a project with only
+        // docs/ or examples/ (non-source top-level dirs) correctly
+        // falls through to a build handoff.
         if (!policy.deployment_intent) {
-          const matureRepo =
-            this.scan.languages.length > 0 ||
-            this.scan.frameworks.length > 0 ||
-            this.scan.infrastructure.length > 0 ||
-            this.scan.topLevelDirs.length > 0;
-          if (this.scan.hasExistingPolicy && matureRepo) {
+          if (this.scan.hasExistingPolicy && repoHasRealSource(this.scan)) {
             policy.deployment_intent = "govern";
           } else {
             const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
