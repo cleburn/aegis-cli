@@ -488,16 +488,18 @@ export async function readFileSafe(
 }
 
 /**
- * Read a prior Aegis session transcript without the 10KB truncation
- * cap that general scan files use. Session files are produced by
- * this CLI itself, so we know the content shape (JSON transcript)
- * and we need the full conversation verbatim on return visits — a
- * silent mid-file cut would make the "pick up where you left off"
- * contract a lie. The 1MB absolute ceiling still applies as a safety
- * floor against pathological cases; oversize transcripts return a
- * distinct marker so the caller can surface a placeholder instead of
- * dropping the session silently.
+ * Upper bound on the size of a session transcript we will read in
+ * full. Session transcripts are produced by this CLI itself, so in
+ * practice a legitimate file is a few tens of KB. 100MB is a sanity
+ * ceiling against a pathological or hostile file tricking us into
+ * loading gigabytes into memory; it has no bearing on the LLM's
+ * context budget, which is the actual practical limit. Anything
+ * under this ceiling is loaded verbatim — the product contract is
+ * "prior transcripts verbatim" and we honor it for every realistic
+ * session size.
  */
+const MAX_SESSION_TRANSCRIPT_SIZE = 100 * 1024 * 1024;
+
 export const OVERSIZE_SESSION = Symbol("oversize-session");
 
 export interface OversizeSessionInfo {
@@ -505,6 +507,11 @@ export interface OversizeSessionInfo {
   readonly size: number;
 }
 
+/**
+ * Read a prior Aegis session transcript without the 10KB truncation
+ * cap that general scan files use. The "pick up where you left off"
+ * contract requires full conversation history, not a truncated view.
+ */
 export async function readSessionTranscript(
   filePath: string
 ): Promise<FileContent | null | OversizeSessionInfo> {
@@ -512,7 +519,7 @@ export async function readSessionTranscript(
     if (!fs.existsSync(filePath)) return null;
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) return null;
-    if (stat.size > MAX_FILE_SIZE_ABSOLUTE) {
+    if (stat.size > MAX_SESSION_TRANSCRIPT_SIZE) {
       return { marker: OVERSIZE_SESSION, size: stat.size };
     }
     const content = fs.readFileSync(filePath, "utf-8");
@@ -524,6 +531,59 @@ export async function readSessionTranscript(
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse + shape-validate a transcript string before it gets reused
+ * as LLM prompt context. Session files are plain JSON on disk with
+ * no write-time signature, so a user (or anything with write access)
+ * could tamper with one and re-run aegis init. Message contents
+ * themselves must stay verbatim (they're the conversation), but the
+ * surrounding JSON structure is worth locking down: extra top-level
+ * fields, unexpected types, or a completely different payload shape
+ * should never reach the prompt unchallenged.
+ *
+ * On success, returns the re-serialized clean shape — stripping any
+ * injected fields while preserving every message verbatim. On
+ * failure, returns null; the caller substitutes a placeholder entry
+ * so the LLM sees that a transcript existed but could not be loaded.
+ */
+export function validateAndNormalizeTranscript(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const obj = parsed as {
+    timestamp?: unknown;
+    messages?: unknown;
+  };
+
+  if (!Array.isArray(obj.messages)) return null;
+
+  const cleanMessages: Array<{ role: string; content: string }> = [];
+  for (const m of obj.messages) {
+    if (!m || typeof m !== "object") return null;
+    const msg = m as { role?: unknown; content?: unknown };
+    if (typeof msg.role !== "string") return null;
+    if (typeof msg.content !== "string") return null;
+    cleanMessages.push({ role: msg.role, content: msg.content });
+  }
+
+  const clean: { timestamp?: string; messages: typeof cleanMessages } = {
+    messages: cleanMessages,
+  };
+  if (typeof obj.timestamp === "string") {
+    clean.timestamp = obj.timestamp;
+  }
+
+  return JSON.stringify(clean, null, 2);
 }
 
 /**
@@ -868,12 +928,13 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const sessionsDir = path.join(policyDir, "sessions");
   if (hasExistingPolicy && fs.existsSync(sessionsDir)) {
     try {
-      // Sort by mtime rather than filename so mixed-format directories
-      // (legacy ISO-timestamp transcripts alongside new NN-session.json
-      // ones) still return in chronological order. Pure lexicographic
-      // sort would put NN-prefixed names before ISO-prefixed ones
-      // because "0" < "2", breaking return-visit history order on any
-      // project that was active across the filename-scheme change.
+      // Sort by mtime so mixed-format directories (legacy ISO-timestamp
+      // transcripts alongside new NN-session.json ones) still return
+      // in chronological order — pure lexicographic sort would put
+      // NN-prefixed names before ISO-prefixed ones because "0" < "2".
+      // Secondary sort key is the filename so ties (identical mtime,
+      // rare but possible) resolve deterministically rather than
+      // falling back to whatever order glob returned.
       const sessionFiles = glob
         .sync("*.json", { cwd: sessionsDir })
         .map((name) => {
@@ -885,8 +946,9 @@ export async function scanRepo(root: string): Promise<ScanResult> {
           }
           return { name, mtime };
         })
-        .sort((a, b) => a.mtime - b.mtime)
+        .sort((a, b) => a.mtime - b.mtime || a.name.localeCompare(b.name))
         .map((entry) => entry.name);
+
       for (const sessionFile of sessionFiles) {
         const fullPath = path.join(sessionsDir, sessionFile);
         const result = await readSessionTranscript(fullPath);
@@ -895,14 +957,34 @@ export async function scanRepo(root: string): Promise<ScanResult> {
           const mb = (result.size / 1024 / 1024).toFixed(1);
           existingSessionTranscripts.push({
             path: `.agentpolicy/sessions/${sessionFile}`,
-            content: `[Session transcript omitted — file size ${mb}MB exceeds the 1MB ceiling. Open the file directly if this history is needed.]`,
+            content: `[Session transcript omitted — file size ${mb}MB exceeds the safety ceiling. Open the file directly if this history is needed.]`,
             truncated: true,
           });
           continue;
         }
-        const content = result as FileContent;
-        content.path = `.agentpolicy/sessions/${sessionFile}`;
-        existingSessionTranscripts.push(content);
+        const rawContent = (result as FileContent).content;
+
+        // Validate shape and re-serialize before feeding into the
+        // discovery prompt. A user-tampered transcript with an
+        // unexpected shape (extra top-level directives, array root,
+        // etc.) gets replaced with a placeholder rather than being
+        // trusted as LLM context. Message contents themselves still
+        // flow through verbatim — they are the conversation.
+        const clean = validateAndNormalizeTranscript(rawContent);
+        if (clean === null) {
+          existingSessionTranscripts.push({
+            path: `.agentpolicy/sessions/${sessionFile}`,
+            content: `[Session transcript omitted — malformed or unexpected shape. The file may have been edited outside aegis.]`,
+            truncated: true,
+          });
+          continue;
+        }
+
+        existingSessionTranscripts.push({
+          path: `.agentpolicy/sessions/${sessionFile}`,
+          content: clean,
+          truncated: false,
+        });
       }
     } catch {
       // Can't read sessions

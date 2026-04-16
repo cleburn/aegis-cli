@@ -358,9 +358,6 @@ export function writeTranscript(
   const sessionsDir = path.join(projectRoot, ".agentpolicy", "sessions");
   fs.mkdirSync(sessionsDir, { recursive: true });
 
-  const filename = nextSessionFilename(sessionsDir);
-  const filePath = path.join(sessionsDir, filename);
-
   const now = new Date();
   const session = {
     timestamp: now.toISOString(),
@@ -369,10 +366,36 @@ export function writeTranscript(
       content: m.content,
     })),
   };
+  const payload = JSON.stringify(session, null, 2) + "\n";
 
-  writeFileAtomic(filePath, JSON.stringify(session, null, 2) + "\n");
-
-  return `.agentpolicy/sessions/${filename}`;
+  // Allocate a unique filename via exclusive-create retry. The outer
+  // per-project lock already prevents concurrent aegis init runs, but
+  // the transcript writer should not depend on that invariant alone:
+  // if the lock were ever bypassed or this helper reused by future
+  // code, link + EEXIST retry ensures we never silently overwrite a
+  // prior session's audit record.
+  const MAX_ATTEMPTS = 50;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const filename = nextSessionFilename(sessionsDir);
+    const filePath = path.join(sessionsDir, filename);
+    try {
+      writeFileAtomic(filePath, payload, { exclusive: true });
+      return `.agentpolicy/sessions/${filename}`;
+    } catch (err: unknown) {
+      const fsErr = err as NodeJS.ErrnoException;
+      if (fsErr?.code === "EEXIST") {
+        // Another writer took that slot between our lookup and link.
+        // Recompute next prefix and try again. Bounded by MAX_ATTEMPTS
+        // to prevent a runaway loop if something else is consistently
+        // claiming slots faster than we can reserve one.
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(
+    `writeTranscript could not allocate a unique filename in ${sessionsDir} after ${MAX_ATTEMPTS} attempts`
+  );
 }
 
 /**
@@ -388,8 +411,18 @@ export function writeTranscript(
  * leftover directory at the temp path fails the write loudly instead
  * of letting the write be silently redirected. Cleanup on any error
  * removes the temp file so we don't leak artifacts across runs.
+ *
+ * `opts.exclusive` swaps renameSync for linkSync, which fails with
+ * EEXIST if the target already exists rather than overwriting it.
+ * Used for session transcripts where filename reuse implies a race
+ * we want to surface loudly instead of silently clobbering a prior
+ * session's record.
  */
-function writeFileAtomic(filePath: string, data: string): void {
+function writeFileAtomic(
+  filePath: string,
+  data: string,
+  opts: { exclusive?: boolean } = {}
+): void {
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
   const tmpPath = path.join(
@@ -398,7 +431,16 @@ function writeFileAtomic(filePath: string, data: string): void {
   );
   try {
     fs.writeFileSync(tmpPath, data, { encoding: "utf-8", flag: "wx" });
-    fs.renameSync(tmpPath, filePath);
+    if (opts.exclusive) {
+      // link + unlink achieves atomic exclusive placement: link fails
+      // with EEXIST if the target already exists, so we never silently
+      // overwrite. Unlink removes the now-redundant temp entry after
+      // the hard link makes the content visible under the real name.
+      fs.linkSync(tmpPath, filePath);
+      fs.unlinkSync(tmpPath);
+    } else {
+      fs.renameSync(tmpPath, filePath);
+    }
   } catch (err) {
     try {
       fs.unlinkSync(tmpPath);

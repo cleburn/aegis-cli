@@ -478,13 +478,19 @@ export class DiscoveryEngine {
         }
 
         // Default deployment_intent if extraction didn't produce one.
-        // Return visits default to "govern" — the project already has
-        // a policy directory, so a missing intent on a return visit
-        // should never produce a build-from-scratch handoff. Only
-        // first-time runs infer build_single or build_multi from the
-        // shape of the roles set.
+        // "govern" only fits when the project both has existing policy
+        // AND shows signs of real work — source tree, framework setup,
+        // CI config, or any top-level code directory. A skeletal repo
+        // with only a hand-authored .agentpolicy/ on it should still
+        // fall through to a build handoff; otherwise the agent gets
+        // told to "govern" a project with nothing to govern yet.
         if (!policy.deployment_intent) {
-          if (this.scan.hasExistingPolicy) {
+          const matureRepo =
+            this.scan.languages.length > 0 ||
+            this.scan.frameworks.length > 0 ||
+            this.scan.infrastructure.length > 0 ||
+            this.scan.topLevelDirs.length > 0;
+          if (this.scan.hasExistingPolicy && matureRepo) {
             policy.deployment_intent = "govern";
           } else {
             const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
