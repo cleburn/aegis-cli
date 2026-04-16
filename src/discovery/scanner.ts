@@ -15,9 +15,30 @@ export interface FileContent {
   truncated: boolean;
 }
 
+/**
+ * Scan tier — determines how much of the project's content gets read into
+ * the discovery briefing.
+ *
+ * - tiny: <50 eligible files. Full content scan (current behavior).
+ * - normal: default. Targeted reads — config files, CI workflows, root
+ *   README (first 200 lines). No recursive markdown, no docs/, no tests/.
+ * - massive: too large for a content scan. Metadata only. The opener
+ *   pivots straight to conversation.
+ *
+ * Tier is selected by `detectScanTier` using fs.stat only (no content
+ * reads). Env var `AEGIS_SCAN_MODE` forces a specific tier for power users.
+ */
+export type ScanTier = "tiny" | "normal" | "massive";
+
 export interface ScanResult {
   /** Absolute path to project root */
   root: string;
+  /** Scan tier — controls how aggressively file contents were read */
+  scanTier: ScanTier;
+  /** Total eligible file count observed by the pre-scan */
+  scanFileCount: number;
+  /** Total eligible byte size observed by the pre-scan */
+  scanByteSize: number;
   /** Project name (from package.json, pyproject.toml, or directory name) */
   projectName: string;
   /** Project description if found (package.json description, README first paragraph, etc.) */
@@ -254,6 +275,59 @@ const SAFE_ENV_PATTERNS: RegExp[] = [
   /\.env\.sample$/,
 ];
 
+/**
+ * Directories and artifacts that should never enter the scan. Shared
+ * between the tier pre-scan and the full discovery glob so both views
+ * see the same candidate set.
+ */
+const NOISE_IGNORE_PATTERNS: string[] = [
+  "node_modules/**", "dist/**", "build/**", ".git/**",
+  "__pycache__/**", ".next/**", ".nuxt/**", ".output/**",
+  "coverage/**", ".cache/**", ".turbo/**", ".vercel/**",
+  ".netlify/**", "vendor/**", "target/**", ".agentpolicy/**",
+];
+
+// ── Tier Configuration ────────────────────────────────────────────────
+//
+// Thresholds that decide which tier a repo falls into. Tuned to cover
+// roughly 95% of projects with the "normal" targeted-read path.
+// Override any of these with env vars for specific repos.
+//
+//   AEGIS_SCAN_MODE       auto (default) | tiny | normal | massive
+//   AEGIS_SCAN_MAX_FILES  file-count ceiling for normal tier
+//   AEGIS_SCAN_MAX_BYTES  byte-size ceiling for normal tier
+
+const TIER_DEFAULTS = {
+  TINY_MAX_FILES: 50,
+  MASSIVE_MAX_FILES: 500,
+  MASSIVE_MAX_BYTES: 5 * 1024 * 1024,
+};
+
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function resolveTierThresholds(): {
+  tinyMaxFiles: number;
+  massiveMaxFiles: number;
+  massiveMaxBytes: number;
+} {
+  return {
+    tinyMaxFiles: TIER_DEFAULTS.TINY_MAX_FILES,
+    massiveMaxFiles: envInt("AEGIS_SCAN_MAX_FILES", TIER_DEFAULTS.MASSIVE_MAX_FILES),
+    massiveMaxBytes: envInt("AEGIS_SCAN_MAX_BYTES", TIER_DEFAULTS.MASSIVE_MAX_BYTES),
+  };
+}
+
+function resolveForcedTier(): ScanTier | null {
+  const mode = (process.env.AEGIS_SCAN_MODE || "auto").toLowerCase();
+  if (mode === "tiny" || mode === "normal" || mode === "massive") return mode;
+  return null;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 function fileExists(root: string, pattern: string): boolean {
@@ -458,6 +532,44 @@ function parseGitignore(root: string): Set<string> {
 }
 
 /**
+ * Parse .claudeignore with the same semantics as .gitignore. Honored
+ * alongside .gitignore so users aren't forced to maintain two separate
+ * ignore lists for Aegis and Claude Code.
+ */
+function parseClaudeignore(root: string): Set<string> {
+  const ignored = new Set<string>();
+  const claudeignorePath = path.join(root, ".claudeignore");
+
+  try {
+    if (!fs.existsSync(claudeignorePath)) return ignored;
+    const content = fs.readFileSync(claudeignorePath, "utf-8");
+    const patterns = content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+
+    for (const pattern of patterns) {
+      try {
+        const matches = glob.sync(pattern, {
+          cwd: root,
+          dot: true,
+          nodir: false,
+        });
+        for (const match of matches) {
+          ignored.add(match);
+        }
+      } catch {
+        // Invalid pattern, skip
+      }
+    }
+  } catch {
+    // Can't read .claudeignore
+  }
+
+  return ignored;
+}
+
+/**
  * Build a directory tree 2 levels deep from project root.
  * Skips common noise directories.
  */
@@ -540,6 +652,80 @@ function findCIWorkflows(root: string): string[] {
   }
 }
 
+// ── Tier Pre-Scan ─────────────────────────────────────────────────────
+
+/**
+ * Cheap tier decision — fs.stat only, no content reads. Enumerates
+ * candidate files after filtering noise directories, .gitignore,
+ * .claudeignore, and sensitive patterns, then picks the tier by
+ * file count and byte size.
+ *
+ * `AEGIS_SCAN_MODE=tiny|normal|massive` forces the tier regardless of
+ * observed size — the enumeration still runs so callers get accurate
+ * counts for the briefing.
+ *
+ * Also returns `fileCounts` — extension-keyed tallies used by the
+ * briefing. Reuses this pass so we don't enumerate the tree twice.
+ */
+function detectScanTier(
+  root: string,
+  secondaryIgnored: Set<string>
+): {
+  tier: ScanTier;
+  fileCount: number;
+  byteSize: number;
+  fileCounts: Record<string, number>;
+} {
+  const thresholds = resolveTierThresholds();
+  const forced = resolveForcedTier();
+
+  let candidates: string[] = [];
+  try {
+    candidates = glob.sync("**/*", {
+      cwd: root,
+      nodir: true,
+      dot: true,
+      ignore: NOISE_IGNORE_PATTERNS,
+    });
+  } catch {
+    // Enumeration failed — treat as empty, caller will pick normal tier
+  }
+
+  let fileCount = 0;
+  let byteSize = 0;
+  const fileCounts: Record<string, number> = {};
+
+  for (const rel of candidates) {
+    if (secondaryIgnored.has(rel) || secondaryIgnored.has(path.basename(rel))) {
+      continue;
+    }
+    if (isSensitiveFile(rel)) continue;
+
+    try {
+      const stat = fs.statSync(path.join(root, rel));
+      if (!stat.isFile()) continue;
+      fileCount++;
+      byteSize += stat.size;
+      const ext = path.extname(rel).toLowerCase() || "(no ext)";
+      fileCounts[ext] = (fileCounts[ext] || 0) + 1;
+    } catch {
+      // stat failure — skip
+    }
+  }
+
+  const tier: ScanTier =
+    forced !== null
+      ? forced
+      : fileCount < thresholds.tinyMaxFiles
+      ? "tiny"
+      : fileCount >= thresholds.massiveMaxFiles ||
+        byteSize >= thresholds.massiveMaxBytes
+      ? "massive"
+      : "normal";
+
+  return { tier, fileCount, byteSize, fileCounts };
+}
+
 // ── Main Scanner ───────────────────────────────────────────────────────
 
 export async function scanRepo(root: string): Promise<ScanResult> {
@@ -547,6 +733,8 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const pkg = readPackageJson(projectRoot);
   const deps = getDeps(pkg);
   const gitignored = parseGitignore(projectRoot);
+  const claudeignored = parseClaudeignore(projectRoot);
+  const ignoredBySecondary = new Set<string>([...gitignored, ...claudeignored]);
 
   // ── Detect languages ─────────────────────────────────────────────
   const languages: string[] = [];
@@ -665,36 +853,35 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     }
   }
 
-  // ── File counts by extension ─────────────────────────────────────
-  const fileCounts: Record<string, number> = {};
-  if (!hasExistingPolicy) {
-    try {
-      const allFiles = glob.sync("**/*", {
-        cwd: projectRoot,
-        nodir: true,
-        ignore: ["node_modules/**", "dist/**", "build/**", ".git/**", "__pycache__/**"],
-      });
-      for (const file of allFiles) {
-        const ext = path.extname(file).toLowerCase() || "(no ext)";
-        fileCounts[ext] = (fileCounts[ext] || 0) + 1;
-      }
-    } catch {
-      // Limited access
-    }
-  }
+  // ── Tier pre-scan ────────────────────────────────────────────────
+  // Cheap fs.stat-only enumeration decides how aggressively we read file
+  // contents. Also produces extension tallies so we don't walk the tree
+  // twice. Skipped on return visits — the tree wasn't read in full for
+  // content on return anyway, and tier gating adds no value when the
+  // policy files and transcripts already carry the context.
+  const tierResult = hasExistingPolicy
+    ? { tier: "normal" as ScanTier, fileCount: 0, byteSize: 0, fileCounts: {} as Record<string, number> }
+    : detectScanTier(projectRoot, ignoredBySecondary);
+  const scanTier = tierResult.tier;
+  const fileCounts = tierResult.fileCounts;
 
   // ── Discover and read project files ──────────────────────────────
-  // On first visit: discover every file, apply safety filters, read all.
-  // On return visit: skip full discovery — Aegis has policy files and
-  // session transcripts, which are sufficient for delta conversations.
-  // Reading the full codebase on return visits causes context overflow
-  // on large projects (e.g. 43K files, 88MB briefing).
+  // Four branches:
+  //   - Return visit: HIGH_VALUE_FILES only (policy + transcripts carry
+  //     the rest). Tier ignored — the existing policy is authoritative.
+  //   - Tiny tier: current full first-visit discovery. Everything gets
+  //     read up to 10KB per file.
+  //   - Normal tier: targeted reads. Stack-detection files + CI workflows
+  //     + root README (first 200 lines). No recursive docs/, tests/,
+  //     examples/, or markdown sprawl.
+  //   - Massive tier: skip content reads entirely. Metadata-only briefing.
+  //     The opener pivots straight to conversation.
   const fileContents: FileContent[] = [];
   const skippedSensitiveFiles: string[] = [];
 
   if (hasExistingPolicy) {
-    // Return visit — only read high-value files (README, config, CI)
-    // for lightweight project context alongside the policy files
+    // Return visit — only read high-value files for lightweight project
+    // context alongside the policy files
     for (const hvFile of HIGH_VALUE_FILES) {
       const fullPath = path.join(projectRoot, hvFile);
       if (fs.existsSync(fullPath)) {
@@ -705,29 +892,70 @@ export async function scanRepo(root: string): Promise<ScanResult> {
         }
       }
     }
-  } else {
+  } else if (scanTier === "massive") {
+    // Massive tier — skip content reads. The opener acknowledges the
+    // lack of file-level knowledge and pivots to conversation.
+  } else if (scanTier === "normal") {
+    // Normal tier — targeted: HIGH_VALUE_FILES + CI workflows + README
+    // truncated to first 200 lines. No recursive content.
+    const readTargets = new Set<string>();
 
+    for (const hvFile of HIGH_VALUE_FILES) {
+      if (fs.existsSync(path.join(projectRoot, hvFile))) {
+        readTargets.add(hvFile);
+      }
+    }
+
+    for (const wf of findCIWorkflows(projectRoot)) {
+      readTargets.add(wf);
+    }
+
+    for (const target of readTargets) {
+      if (isSensitiveFile(target)) {
+        skippedSensitiveFiles.push(target);
+        continue;
+      }
+
+      const fullPath = path.join(projectRoot, target);
+      const content = await readFileSafe(fullPath);
+
+      if (content === UNSUPPORTED_BINARY) {
+        skippedSensitiveFiles.push(`${target} (binary — unsupported format)`);
+      } else if (content && typeof content !== "symbol") {
+        content.path = target;
+        // Root README gets a 200-line cap on top of the 10KB cap —
+        // whichever is tighter wins. Large READMEs are a major source
+        // of context bloat in markdown-heavy repos that still qualify
+        // as "normal" tier on file count alone.
+        const isRootReadme = /^readme(\.md)?$/i.test(target);
+        if (isRootReadme) {
+          const lines = content.content.split("\n");
+          if (lines.length > 200) {
+            content.content =
+              lines.slice(0, 200).join("\n") +
+              "\n\n[... truncated at 200 lines ...]";
+            content.truncated = true;
+          }
+        }
+        fileContents.push(content);
+      }
+    }
+  } else {
+  // ── Tiny tier — full first-visit discovery ───────────────────────
   const highValueSet = new Set(HIGH_VALUE_FILES.map((f) => f.toLowerCase()));
 
-  // Discover all files in the project (respecting noise exclusions)
   let allProjectFiles: string[] = [];
   try {
     allProjectFiles = glob.sync("**/*", {
       cwd: projectRoot,
       nodir: true,
       dot: true,
-      ignore: [
-        "node_modules/**", "dist/**", "build/**", ".git/**",
-        "__pycache__/**", ".next/**", ".nuxt/**", ".output/**",
-        "coverage/**", ".cache/**", ".turbo/**", ".vercel/**",
-        ".netlify/**", "vendor/**", "target/**", ".agentpolicy/**",
-      ],
+      ignore: NOISE_IGNORE_PATTERNS,
     });
   } catch {
     // Fall back to empty if glob fails
   }
 
-  // Separate into priority (high-value) and discovered files
   const priorityFiles: string[] = [];
   const discoveredFiles: string[] = [];
 
@@ -739,8 +967,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     }
   }
 
-  // Also check for high-value files that might not have been caught
-  // by glob (e.g. dotfiles at root that glob missed)
+  // Pick up high-value dotfiles that glob may have missed at root
   for (const hvFile of HIGH_VALUE_FILES) {
     const fullPath = path.join(projectRoot, hvFile);
     if (fs.existsSync(fullPath) && !priorityFiles.includes(hvFile)) {
@@ -749,9 +976,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   }
 
   // Promote parseable documents at project root to priority list.
-  // A DOCX/PDF/XLSX at root is almost certainly intentional project
-  // documentation — give it the same early-in-briefing treatment
-  // as README.md or package.json regardless of filename.
+  // A DOCX/PDF at root is almost certainly intentional project docs.
   const parseableExtSet = new Set(Object.keys(PARSEABLE_EXTENSIONS));
   const prioritySet = new Set(priorityFiles.map((f) => f.toLowerCase()));
 
@@ -768,13 +993,11 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     }
   }
 
-  // Process all files: priority first, promoted docs second, then everything else
   const allFilesToProcess = [...priorityFiles, ...promotedFromDiscovered, ...remainingDiscovered];
 
   for (const relativePath of allFilesToProcess) {
     const fullPath = path.join(projectRoot, relativePath);
 
-    // Check sensitivity first
     if (isSensitiveFile(relativePath)) {
       if (fs.existsSync(fullPath)) {
         skippedSensitiveFiles.push(relativePath);
@@ -782,9 +1005,10 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       continue;
     }
 
-    // Check if gitignored (another signal of "don't share this")
-    if (gitignored.has(relativePath) || gitignored.has(path.basename(relativePath))) {
-      // Gitignored files that aren't in our safe list get flagged
+    if (
+      ignoredBySecondary.has(relativePath) ||
+      ignoredBySecondary.has(path.basename(relativePath))
+    ) {
       if (!SAFE_ENV_PATTERNS.some((p) => p.test(relativePath))) {
         if (fs.existsSync(fullPath)) {
           skippedSensitiveFiles.push(relativePath);
@@ -796,8 +1020,6 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     const content = await readFileSafe(fullPath);
 
     if (content === UNSUPPORTED_BINARY) {
-      // Binary file with no available parser — flag it so Aegis
-      // can mention it during discovery instead of silently dropping it
       skippedSensitiveFiles.push(
         `${relativePath} (binary — unsupported format)`
       );
@@ -805,7 +1027,6 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       content.path = relativePath;
       fileContents.push(content);
     } else if (fs.existsSync(fullPath)) {
-      // File exists but readFileSafe returned null — likely too large
       try {
         const stat = fs.statSync(fullPath);
         if (stat.isFile() && stat.size > MAX_FILE_SIZE_ABSOLUTE) {
@@ -816,7 +1037,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       }
     }
   }
-  } // end first-visit file discovery
+  } // end tiny-tier discovery
 
   // ── Project metadata ─────────────────────────────────────────────
   const projectName = (pkg?.name as string) || path.basename(projectRoot);
@@ -828,6 +1049,9 @@ export async function scanRepo(root: string): Promise<ScanResult> {
 
   return {
     root: projectRoot,
+    scanTier,
+    scanFileCount: tierResult.fileCount,
+    scanByteSize: tierResult.byteSize,
     projectName,
     projectDescription,
     languages,
@@ -861,11 +1085,23 @@ export function formatScanBriefing(scan: ScanResult): string {
     `PROJECT SCAN BRIEFING`,
     `====================`,
     `Project: ${scan.projectName}`,
-    `Root: ${scan.root}`,
   ];
 
   if (scan.projectDescription) {
     lines.push(`Description: ${scan.projectDescription}`);
+  }
+
+  // Tier indicator — flags when the briefing is shallow so the model
+  // doesn't pretend to have read files it didn't.
+  if (scan.scanTier === "massive") {
+    const mb = (scan.scanByteSize / 1024 / 1024).toFixed(1);
+    lines.push(
+      `Scan mode: massive tier (${scan.scanFileCount}+ files, ${mb}MB) — metadata only, no file contents read.`
+    );
+  } else if (scan.scanTier === "tiny") {
+    lines.push(
+      `Scan mode: tiny tier (${scan.scanFileCount} files) — full content scan.`
+    );
   }
 
   lines.push("");
