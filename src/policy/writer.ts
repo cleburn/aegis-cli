@@ -21,6 +21,19 @@ export interface PolicyFiles {
 }
 
 /**
+ * Structured record of what writePolicy did to each path. Used by the
+ * init command for the on-screen summary, and serialized into the
+ * session transcript so the audit record is accurate about which files
+ * were new vs overwritten vs removed.
+ */
+export type WriteStatus = "created" | "updated" | "deleted" | "unchanged";
+
+export interface WriteOutcome {
+  path: string;
+  status: WriteStatus;
+}
+
+/**
  * Error thrown when extracted policy fails schema validation. The
  * message includes each failing file with its first validation error,
  * so the caller can surface a specific reason rather than "something
@@ -77,7 +90,7 @@ const MCP_CONFIG = {
 export function writePolicy(
   projectRoot: string,
   policy: PolicyFiles
-): string[] {
+): WriteOutcome[] {
   // Hard gate — refuse to write anything if the extracted policy
   // fails schema validation or sanity checks. Throws PolicyValidationError
   // so the caller can retry extraction or surface a specific message.
@@ -99,52 +112,90 @@ export function writePolicy(
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(sessionsDir, { recursive: true });
 
-  const written: string[] = [];
+  const outcomes: WriteOutcome[] = [];
 
-  // Write constitution
+  // Constitution
   const constitutionPath = path.join(policyDir, "constitution.json");
+  const constitutionStatus: WriteStatus = fs.existsSync(constitutionPath) ? "updated" : "created";
   writeJSON(constitutionPath, policy.constitution);
-  written.push(".agentpolicy/constitution.json");
+  outcomes.push({ path: ".agentpolicy/constitution.json", status: constitutionStatus });
 
-  // Write governance
+  // Governance
   const governancePath = path.join(policyDir, "governance.json");
+  const governanceStatus: WriteStatus = fs.existsSync(governancePath) ? "updated" : "created";
   writeJSON(governancePath, policy.governance);
-  written.push(".agentpolicy/governance.json");
+  outcomes.push({ path: ".agentpolicy/governance.json", status: governanceStatus });
 
-  // Write roles — filename sanitized even though validation already
-  // rejected bad names, because defense in depth matters when the
-  // filename is derived from LLM output.
+  // Roles — write new/updated, then reconcile by deleting any prior
+  // role file that is no longer in the extracted policy. On return
+  // visits where the user removed a role, this converges the on-disk
+  // state with the compiled policy instead of leaving orphan files.
+  const existingRoleFiles = fs.existsSync(rolesDir)
+    ? fs.readdirSync(rolesDir).filter((f) => f.endsWith(".json"))
+    : [];
+
+  const newRoleFilenames = new Set<string>();
   for (const [roleName, roleData] of Object.entries(policy.roles)) {
     const filename = sanitizedRoleFilename(roleName);
+    newRoleFilenames.add(filename);
     const rolePath = path.join(rolesDir, filename);
+    const status: WriteStatus = fs.existsSync(rolePath) ? "updated" : "created";
     writeJSON(rolePath, roleData);
-    written.push(`.agentpolicy/roles/${filename}`);
+    outcomes.push({ path: `.agentpolicy/roles/${filename}`, status });
   }
 
-  // Write ledger
+  for (const existing of existingRoleFiles) {
+    if (newRoleFilenames.has(existing)) continue;
+    try {
+      fs.unlinkSync(path.join(rolesDir, existing));
+      outcomes.push({
+        path: `.agentpolicy/roles/${existing}`,
+        status: "deleted",
+      });
+    } catch {
+      // Unlink failed — leave the file and don't claim it was removed
+    }
+  }
+
+  // Ledger
   const ledgerPath = path.join(stateDir, "ledger.json");
+  const ledgerStatus: WriteStatus = fs.existsSync(ledgerPath) ? "updated" : "created";
   writeJSON(ledgerPath, policy.ledger);
-  written.push(".agentpolicy/state/ledger.json");
+  outcomes.push({ path: ".agentpolicy/state/ledger.json", status: ledgerStatus });
 
-  // Create empty overrides log (append-only, populated at runtime)
+  // overrides.jsonl — append-only at runtime. Created empty on first
+  // visit, left untouched on subsequent runs so the runtime log is
+  // preserved across aegis init invocations.
   const overridesPath = path.join(stateDir, "overrides.jsonl");
-  if (!fs.existsSync(overridesPath)) {
+  if (fs.existsSync(overridesPath)) {
+    outcomes.push({
+      path: ".agentpolicy/state/overrides.jsonl",
+      status: "unchanged",
+    });
+  } else {
     fs.writeFileSync(overridesPath, "", "utf-8");
+    outcomes.push({
+      path: ".agentpolicy/state/overrides.jsonl",
+      status: "created",
+    });
   }
-  written.push(".agentpolicy/state/overrides.jsonl");
 
-  // Write .mcp.json to project root (only if it doesn't already exist)
+  // .mcp.json — never overwrite. If the user already has one, leave
+  // it alone and report unchanged so the CLI doesn't pretend it wrote
+  // a fresh file.
   const mcpConfigPath = path.join(projectRoot, ".mcp.json");
-  if (!fs.existsSync(mcpConfigPath)) {
+  if (fs.existsSync(mcpConfigPath)) {
+    outcomes.push({ path: ".mcp.json", status: "unchanged" });
+  } else {
     fs.writeFileSync(
       mcpConfigPath,
       JSON.stringify(MCP_CONFIG, null, 2) + "\n",
       "utf-8"
     );
-    written.push(".mcp.json");
+    outcomes.push({ path: ".mcp.json", status: "created" });
   }
 
-  return written;
+  return outcomes;
 }
 
 /**

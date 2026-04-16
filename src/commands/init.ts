@@ -19,7 +19,7 @@ import { resolveApiKey } from "../config/api-key.js";
 import { AnthropicProvider } from "../llm/anthropic.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
-import { writePolicy, writeTranscript } from "../policy/writer.js";
+import { writePolicy, writeTranscript, type WriteOutcome } from "../policy/writer.js";
 import { TerminalUI } from "../ui/terminal.js";
 
 // Read version from package.json so the banner stays in sync with publishes.
@@ -73,11 +73,11 @@ export async function initCommand(): Promise<void> {
 
     // Write policy if changes were made — skip if conversation
     // concluded with no modifications needed
-    let filesCreated: string[] = [];
+    let fileOutcomes: WriteOutcome[] = [];
     if (result.policy) {
-      filesCreated = writePolicy(cwd, result.policy);
+      fileOutcomes = writePolicy(cwd, result.policy);
 
-      ui.showFilesCreated(filesCreated);
+      ui.showFilesCreated(formatOutcomes(fileOutcomes));
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
 
       // ── Next Steps ───────────────────────────────────────────────
@@ -107,7 +107,7 @@ export async function initCommand(): Promise<void> {
         role: "system",
         content: JSON.stringify({
           type: "session_closing",
-          files_created: filesCreated,
+          files: fileOutcomes,
           policy_path: `${cwd}/.agentpolicy/`,
           handoff_prompt: result.policy.handoff_prompt,
           deployment_intent: result.policy.deployment_intent,
@@ -208,4 +208,27 @@ async function runPostCompletionLoop(
 
     await engine.continueConversation(input);
   }
+}
+
+/**
+ * Render the write outcomes as labeled display strings for the files
+ * summary. Column-aligned so the path list reads cleanly regardless of
+ * mix of statuses. "unchanged" rows (e.g. a pre-existing .mcp.json)
+ * are shown so the user has a complete picture of what Aegis did and
+ * did not touch.
+ */
+function formatOutcomes(outcomes: WriteOutcome[]): string[] {
+  const label = (status: WriteOutcome["status"]): string => {
+    switch (status) {
+      case "created":
+        return "created  ";
+      case "updated":
+        return "updated  ";
+      case "deleted":
+        return "deleted  ";
+      case "unchanged":
+        return "unchanged";
+    }
+  };
+  return outcomes.map((o) => `${label(o.status)}  ${o.path}`);
 }
