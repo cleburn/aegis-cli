@@ -1292,8 +1292,21 @@ export function formatScanBriefing(scan: ScanResult): string {
   const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
 
   if (scan.hasExistingPolicy && hasLoadedPolicy) {
+    // Only name transcripts in the scope list if any were actually
+    // loaded. The opener already checks transcriptCount > 0 before
+    // mentioning them; the briefing now matches so the prompt doesn't
+    // claim content in one section that another section silently omits.
+    const parts = [".agentpolicy/ contents"];
+    if (transcriptCount > 0) {
+      parts.push(`${transcriptCount} prior session transcript(s)`);
+    }
+    parts.push("HIGH_VALUE_FILES");
+    const scopeList =
+      parts.length === 2
+        ? `${parts[0]} and ${parts[1]}`
+        : `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
     lines.push(
-      `Scan mode: return visit — focused read of .agentpolicy/ contents, prior session transcripts, and HIGH_VALUE_FILES. The rest of the repo is not part of this prompt's context unless you and the user discuss it.`
+      `Scan mode: return visit — focused read of ${scopeList}. The rest of the repo is not part of this prompt's context unless you and the user discuss it.`
     );
   } else if (scan.hasExistingPolicy) {
     const transcriptNote =
