@@ -26,11 +26,18 @@ export interface PolicyFiles {
  * session transcript so the audit record is accurate about which files
  * were new vs overwritten vs removed.
  */
-export type WriteStatus = "created" | "updated" | "deleted" | "unchanged";
+export type WriteStatus =
+  | "created"
+  | "updated"
+  | "deleted"
+  | "unchanged"
+  | "skipped";
 
 export interface WriteOutcome {
   path: string;
   status: WriteStatus;
+  /** Populated when status is "skipped" — explains why the operation didn't complete. */
+  reason?: string;
 }
 
 /**
@@ -130,11 +137,21 @@ export function writePolicy(
   // role file that is no longer in the extracted policy. On return
   // visits where the user removed a role, this converges the on-disk
   // state with the compiled policy instead of leaving orphan files.
+  //
+  // Reconciliation compares by canonical path (fs.realpathSync) rather
+  // than raw filename so case-insensitive filesystems (APFS, NTFS)
+  // don't delete the role we just wrote. Example: Default.json exists
+  // on disk, LLM emits role "default". Our write lands on the same
+  // inode (macOS keeps the stored case "Default.json") — the deletion
+  // pass must recognize the two names as the same file, not two
+  // different ones. Canonical-path comparison handles that correctly
+  // on every platform and also collapses symlinks cleanly.
   const existingRoleFiles = fs.existsSync(rolesDir)
     ? fs.readdirSync(rolesDir).filter((f) => f.endsWith(".json"))
     : [];
 
   const newRoleFilenames = new Set<string>();
+  const writtenCanonical = new Set<string>();
   for (const [roleName, roleData] of Object.entries(policy.roles)) {
     const filename = sanitizedRoleFilename(roleName);
     newRoleFilenames.add(filename);
@@ -142,18 +159,54 @@ export function writePolicy(
     const status: WriteStatus = fs.existsSync(rolePath) ? "updated" : "created";
     writeJSON(rolePath, roleData);
     outcomes.push({ path: `.agentpolicy/roles/${filename}`, status });
+    try {
+      writtenCanonical.add(fs.realpathSync.native(rolePath));
+    } catch {
+      // If realpath fails right after write, something's wrong with
+      // the filesystem and we shouldn't risk deletions based on
+      // incomplete data. Skip the whole reconciliation loop below.
+    }
   }
 
-  for (const existing of existingRoleFiles) {
-    if (newRoleFilenames.has(existing)) continue;
-    try {
-      fs.unlinkSync(path.join(rolesDir, existing));
-      outcomes.push({
-        path: `.agentpolicy/roles/${existing}`,
-        status: "deleted",
-      });
-    } catch {
-      // Unlink failed — leave the file and don't claim it was removed
+  // Only reconcile if we successfully canonicalized every write. A
+  // partial realpath view could misidentify a just-written file as
+  // stale and unlink it. Fail-safe: skip cleanup this run; the next
+  // aegis init will pick up the reconciliation.
+  const canReconcile = writtenCanonical.size === newRoleFilenames.size;
+  if (canReconcile) {
+    for (const existing of existingRoleFiles) {
+      const existingPath = path.join(rolesDir, existing);
+      let resolved: string | null = null;
+      try {
+        resolved = fs.realpathSync.native(existingPath);
+      } catch (err: unknown) {
+        const fsErr = err as NodeJS.ErrnoException;
+        if (fsErr?.code === "ENOENT") continue;
+        outcomes.push({
+          path: `.agentpolicy/roles/${existing}`,
+          status: "skipped",
+          reason: `could not resolve: ${fsErr?.message ?? "unknown"}`,
+        });
+        continue;
+      }
+
+      if (resolved && writtenCanonical.has(resolved)) continue;
+
+      try {
+        fs.unlinkSync(existingPath);
+        outcomes.push({
+          path: `.agentpolicy/roles/${existing}`,
+          status: "deleted",
+        });
+      } catch (err: unknown) {
+        const fsErr = err as NodeJS.ErrnoException;
+        if (fsErr?.code === "ENOENT") continue;
+        outcomes.push({
+          path: `.agentpolicy/roles/${existing}`,
+          status: "skipped",
+          reason: `could not remove: ${fsErr?.message ?? "unknown"}`,
+        });
+      }
     }
   }
 
@@ -233,15 +286,33 @@ export function writeTranscript(
  * fs.renameSync is atomic on POSIX for same-filesystem targets, so a
  * crash between the write and the rename leaves either the old
  * contents or nothing visible under the target name — never a
- * half-written file readable by the next aegis run. The temp suffix
- * includes process.pid to avoid collisions between concurrent callers
- * on the same target (which the lockfile also prevents, but defense
- * in depth).
+ * half-written file readable by the next aegis run.
+ *
+ * The temp filename combines pid + high-resolution timestamp so stale
+ * artifacts from a prior crashed run cannot collide with ours, and
+ * the temp is opened with `wx` (exclusive create) so a symlink or
+ * leftover directory at the temp path fails the write loudly instead
+ * of letting the write be silently redirected. Cleanup on any error
+ * removes the temp file so we don't leak artifacts across runs.
  */
 function writeFileAtomic(filePath: string, data: string): void {
-  const tmpPath = `${filePath}.tmp.${process.pid}`;
-  fs.writeFileSync(tmpPath, data, "utf-8");
-  fs.renameSync(tmpPath, filePath);
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const tmpPath = path.join(
+    dir,
+    `.${base}.tmp.${process.pid}.${Date.now()}`
+  );
+  try {
+    fs.writeFileSync(tmpPath, data, { encoding: "utf-8", flag: "wx" });
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // Best-effort cleanup — original error is what matters
+    }
+    throw err;
+  }
 }
 
 function writeJSON(filePath: string, data: Record<string, unknown>): void {

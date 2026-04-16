@@ -74,12 +74,48 @@ export function acquireLock(projectRoot: string): string {
   } catch (err: unknown) {
     const sigErr = err as NodeJS.ErrnoException;
     if (sigErr?.code === "ESRCH") {
-      fs.writeFileSync(lockPath, `${process.pid}\n`);
-      return lockPath;
+      // Stale lock — unlink then re-acquire exclusively. The `wx`
+      // flag ensures we fail closed if another contender raced in
+      // after our unlink, so two processes cannot both "win" the
+      // takeover path. A plain writeFileSync here would let both
+      // overwrite and both proceed to clobber each other's output.
+      try {
+        fs.unlinkSync(lockPath);
+      } catch (unlinkErr: unknown) {
+        const e = unlinkErr as NodeJS.ErrnoException;
+        if (e?.code !== "ENOENT") throw e;
+      }
+      try {
+        fs.writeFileSync(lockPath, `${process.pid}\n`, { flag: "wx" });
+        return lockPath;
+      } catch (retryErr: unknown) {
+        const e = retryErr as NodeJS.ErrnoException;
+        if (e?.code === "EEXIST") {
+          throw new LockConflictError(0, lockPath);
+        }
+        throw retryErr;
+      }
     }
   }
 
   throw new LockConflictError(holderPid, lockPath);
+}
+
+/**
+ * Register a synchronous cleanup handler that removes the lock when
+ * the process exits, regardless of exit path. `process.on('exit')`
+ * fires for normal completion, process.exit, uncaught exceptions
+ * (after Node's default handler), and signal-induced termination once
+ * re-raised, so this closes the gap where a deep process.exit() call
+ * in another module would otherwise bypass the top-level finally
+ * block and leave an orphan lock on disk.
+ *
+ * Only sync work is allowed here — releaseLock is sync by design for
+ * exactly this reason. Safe to double-call: releaseLock is a no-op
+ * if the lock is already gone.
+ */
+export function registerExitCleanup(lockPath: string): void {
+  process.once("exit", () => releaseLock(lockPath));
 }
 
 /**

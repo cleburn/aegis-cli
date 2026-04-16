@@ -37,6 +37,25 @@ export interface PolicyObject {
 /** Schema-defined role-name pattern. Any role file or object must match. */
 export const ROLE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
+/**
+ * Reserved filenames on Windows — these pass ROLE_NAME_PATTERN but
+ * cannot be created as files on NTFS regardless of extension. We keep
+ * the CLI portable to Windows users even though the build script and
+ * primary dev targets are POSIX.
+ */
+const WINDOWS_RESERVED_BASENAMES = new Set<string>([
+  "con", "prn", "nul", "aux",
+  "com0", "com1", "com2", "com3", "com4",
+  "com5", "com6", "com7", "com8", "com9",
+  "lpt0", "lpt1", "lpt2", "lpt3", "lpt4",
+  "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+]);
+
+/** True when the name is safe to use as a filename on every platform. */
+export function isReservedRoleName(name: string): boolean {
+  return WINDOWS_RESERVED_BASENAMES.has(name.toLowerCase());
+}
+
 function loadSchema(name: string): object {
   const schemaPath = path.join(SCHEMA_DIR, `${name}.schema.json`);
   return JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
@@ -124,6 +143,16 @@ export function validatePolicyObject(policy: PolicyObject): ValidationResult[] {
         });
         continue;
       }
+      if (isReservedRoleName(roleName)) {
+        results.push({
+          file: `roles/${roleName}.json`,
+          valid: false,
+          errors: [
+            `Role name "${roleName}" is reserved on Windows and cannot be used as a filename on every platform.`,
+          ],
+        });
+        continue;
+      }
       results.push(validateAgainstSchema(roleData, "role", `roles/${roleName}.json`));
     }
   }
@@ -197,6 +226,16 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
             valid: false,
             errors: [
               `Role filename "${roleFile}" does not match ${ROLE_NAME_PATTERN}.`,
+            ],
+          });
+          continue;
+        }
+        if (isReservedRoleName(bareName)) {
+          results.push({
+            file: path.join(rolesDir, roleFile),
+            valid: false,
+            errors: [
+              `Role filename "${roleFile}" uses a Windows-reserved name.`,
             ],
           });
           continue;

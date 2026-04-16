@@ -20,7 +20,12 @@ import { AnthropicProvider } from "../llm/anthropic.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
 import { writePolicy, writeTranscript, type WriteOutcome } from "../policy/writer.js";
-import { acquireLock, releaseLock, LockConflictError } from "../policy/lock.js";
+import {
+  acquireLock,
+  releaseLock,
+  registerExitCleanup,
+  LockConflictError,
+} from "../policy/lock.js";
 import { TerminalUI } from "../ui/terminal.js";
 
 // Read version from package.json so the banner stays in sync with publishes.
@@ -44,9 +49,12 @@ export async function initCommand(): Promise<void> {
   // Acquire the per-project lock before any interactive work, so a
   // user who fires a second aegis init in the same repo sees a clear
   // conflict message rather than two scans clobbering each other.
+  // Register the exit-cleanup hook immediately so a deep process.exit
+  // from another module cannot strand the lock on disk.
   let lockPath: string | null = null;
   try {
     lockPath = acquireLock(cwd);
+    registerExitCleanup(lockPath);
   } catch (err) {
     if (err instanceof LockConflictError) {
       ui.showError(err.message);
@@ -247,7 +255,12 @@ function formatOutcomes(outcomes: WriteOutcome[]): string[] {
         return "deleted  ";
       case "unchanged":
         return "unchanged";
+      case "skipped":
+        return "skipped  ";
     }
   };
-  return outcomes.map((o) => `${label(o.status)}  ${o.path}`);
+  return outcomes.map((o) => {
+    const base = `${label(o.status)}  ${o.path}`;
+    return o.reason ? `${base} — ${o.reason}` : base;
+  });
 }
