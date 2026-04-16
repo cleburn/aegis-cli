@@ -44,6 +44,16 @@ export interface DiscoveryResult {
     /** Custom handoff prompt crafted by the extraction LLM from the full conversation context */
     handoff_prompt: string;
   } | null;
+  /**
+   * How the discovery conversation concluded.
+   * - "completed": user affirmed changes, extraction ran successfully, policy is set.
+   * - "no_changes": user explicitly confirmed nothing needs to change.
+   * - "extraction_failed": user affirmed changes, but extraction returned null
+   *   after retries. The init command must NOT enter post-completion mode in
+   *   this state — doing so would tell the user "your policy was written"
+   *   when it wasn't.
+   */
+  status: "completed" | "no_changes" | "extraction_failed";
 }
 
 export class DiscoveryEngine {
@@ -98,8 +108,34 @@ export class DiscoveryEngine {
       // Get Aegis's response (streamed to terminal)
       const response = await this.getAegisResponse();
 
-      // Check for completion signals
+      // Completion markers can only fire after the user has explicitly
+      // affirmed Aegis's summary. The prompt instructs Aegis to emit
+      // markers only in a second message following a user affirmation,
+      // but the engine enforces independently so a drift in the prompt,
+      // a hallucinated marker, or a model glitch can never start
+      // extraction prematurely. Two gates:
+      //
+      //   1. isSimpleAffirmative(userInput) — the user's most recent
+      //      message must read as an unambiguous "go ahead." Anything
+      //      containing a question, a new instruction, a hedge, or a
+      //      refusal blocks marker processing.
+      //   2. containsTrailingQuestion(response) — Aegis's own message
+      //      cannot end in a question if the marker is valid. A marker
+      //      in a message still asking for confirmation is always a
+      //      prompt bug.
+      //
+      // When either gate fails, the marker is dropped from the control
+      // flow (still swallowed from the user-visible stream above) and
+      // the conversation continues so the user can actually confirm.
+      const userAffirmed = isSimpleAffirmative(userInput);
+
       if (response.includes("[NO_CHANGES]")) {
+        if (!userAffirmed || containsTrailingQuestion(response)) {
+          process.stderr.write(
+            "[aegis] ignored premature [NO_CHANGES] — no unambiguous user affirmation on record\n"
+          );
+          continue;
+        }
         // Conversation concluded with no policy modifications needed.
         // Skip extraction entirely — the existing files are correct.
         this.ui.showNote("Policy unchanged. Everything's current.");
@@ -107,18 +143,14 @@ export class DiscoveryEngine {
         return {
           transcript: [...this.messages],
           policy: null,
+          status: "no_changes",
         };
       }
 
       if (response.includes("[DISCOVERY_COMPLETE]")) {
-        // Defensive check: if the marker arrives in a message that also
-        // contains a question mark near the end, the model is asking for
-        // confirmation, not signalling completion. Swallow the marker and
-        // wait for the user to respond. The prompt should prevent this,
-        // but the check guards against drift.
-        if (containsTrailingQuestion(response)) {
+        if (!userAffirmed || containsTrailingQuestion(response)) {
           process.stderr.write(
-            "[aegis] ignored premature [DISCOVERY_COMPLETE] — message contained a trailing question\n"
+            "[aegis] ignored premature [DISCOVERY_COMPLETE] — no unambiguous user affirmation on record\n"
           );
           continue;
         }
@@ -131,6 +163,7 @@ export class DiscoveryEngine {
         return {
           transcript: [...this.messages],
           policy,
+          status: policy ? "completed" : "extraction_failed",
         };
       }
 
@@ -555,4 +588,53 @@ function containsTrailingQuestion(response: string): boolean {
     .trimEnd();
   const tail = stripped.slice(-200);
   return tail.includes("?");
+}
+
+/**
+ * Heuristic for "the user's most recent message was an unambiguous
+ * affirmation." Used as a gate for completion markers — the engine
+ * refuses to honor [DISCOVERY_COMPLETE] or [NO_CHANGES] unless the
+ * user turn that preceded the marker reads as a clear go-ahead.
+ *
+ * Conservative by design. False negatives (treating a real
+ * affirmation as non-affirmation) just mean the marker is dropped
+ * and the conversation continues — Aegis re-asks, the user confirms
+ * again, extraction proceeds. False positives (treating a
+ * non-affirmation as affirmation) would let premature extraction
+ * slip through, which is the whole thing we're guarding against.
+ *
+ * Rules:
+ * - Empty or very long messages never count as simple affirmations.
+ * - Any question, hedge, refusal, or new-instruction signal blocks
+ *   affirmation regardless of other content.
+ * - The message must contain at least one recognized affirmative
+ *   token — "yes", "proceed", "looks good", "ship it", and similar.
+ */
+function isSimpleAffirmative(userInput: string): boolean {
+  const trimmed = userInput.trim().toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 80) return false;
+  if (trimmed.includes("?")) return false;
+
+  const hedgeSignals = [
+    "but ", "actually", "however", "wait", "hmm",
+    "add ", "remove ", "change ", "update ", "make ", "set ", "include ",
+    "delete ", "fix ", "instead", "rather",
+    "one more", "one thing", "except", "also", "additionally",
+    " no ", "not ", "don't", "dont", "stop",
+  ];
+  if (hedgeSignals.some((s) => trimmed.includes(s))) return false;
+
+  const affirmativeTokens = [
+    "yes", "yeah", "yep", "yup",
+    "ok", "okay",
+    "sure", "alright", "cool",
+    "proceed", "continue", "go ahead",
+    "do it", "ship it", "let's go", "let's do it",
+    "confirmed", "confirm",
+    "looks good", "sounds good", "sounds right", "that works",
+    "that's right", "exactly", "correct",
+    "agreed", "approved", "perfect",
+    "👍", "🚀", "+1",
+  ];
+  return affirmativeTokens.some((t) => trimmed.includes(t));
 }
