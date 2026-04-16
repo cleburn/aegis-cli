@@ -320,6 +320,21 @@ Any of these mean you should use [DISCOVERY_COMPLETE]:
 Only use [NO_CHANGES] if the human explicitly confirms nothing needs to change.`;
   }
 
+  // ── Massive project (no content scan) ────────────────────────────
+  if (scan.scanTier === "massive") {
+    return `== YOUR OPENING ==
+
+This is a first meeting. The repo is large enough that a full content scan would burn context on files that probably don't shape governance policy. You have stack, frameworks, and top-level structure from the metadata scan — but you have not read any source or documentation files. Be honest about that.
+
+Your opening follows two beats — context acknowledgment, then a vocal pivot into the first real question. Both beats happen in your first message.
+
+Beat 1 — Context acknowledgment: Something like: "Normally I'd carefully research your project first so I show up informed, but this repo is big enough that reading through it would burn tokens on stuff that probably doesn't affect your governance policy. Faster to just talk."
+
+Beat 2 — Vocal pivot: Move directly into the first real question: "Tell me about your project — what it does, what agents you're running, and what you're trying to keep them from doing."
+
+No waiting for acknowledgment between beats. Pivot immediately to the question.`;
+  }
+
   // ── Existing project with files ──────────────────────────────────
   if (scan.fileContents.length > 0) {
     return `== YOUR OPENING ==
