@@ -171,7 +171,8 @@ export function writePolicy(
   // Only reconcile if we successfully canonicalized every write. A
   // partial realpath view could misidentify a just-written file as
   // stale and unlink it. Fail-safe: skip cleanup this run; the next
-  // aegis init will pick up the reconciliation.
+  // aegis init will pick up the reconciliation. Every skipped decision
+  // still produces a WriteOutcome so the audit trail is complete.
   const canReconcile = writtenCanonical.size === newRoleFilenames.size;
   if (canReconcile) {
     for (const existing of existingRoleFiles) {
@@ -181,7 +182,14 @@ export function writePolicy(
         resolved = fs.realpathSync.native(existingPath);
       } catch (err: unknown) {
         const fsErr = err as NodeJS.ErrnoException;
-        if (fsErr?.code === "ENOENT") continue;
+        if (fsErr?.code === "ENOENT") {
+          outcomes.push({
+            path: `.agentpolicy/roles/${existing}`,
+            status: "skipped",
+            reason: "entry vanished before reconciliation",
+          });
+          continue;
+        }
         outcomes.push({
           path: `.agentpolicy/roles/${existing}`,
           status: "skipped",
@@ -200,13 +208,34 @@ export function writePolicy(
         });
       } catch (err: unknown) {
         const fsErr = err as NodeJS.ErrnoException;
-        if (fsErr?.code === "ENOENT") continue;
+        if (fsErr?.code === "ENOENT") {
+          outcomes.push({
+            path: `.agentpolicy/roles/${existing}`,
+            status: "skipped",
+            reason: "entry vanished before deletion",
+          });
+          continue;
+        }
         outcomes.push({
           path: `.agentpolicy/roles/${existing}`,
           status: "skipped",
           reason: `could not remove: ${fsErr?.message ?? "unknown"}`,
         });
       }
+    }
+  } else {
+    // Reconciliation aborted because at least one write could not be
+    // canonicalized. Emit explicit skipped outcomes for each entry
+    // that would otherwise have been a candidate so the manifest
+    // records "we decided not to touch these" rather than dropping
+    // them silently from the audit trail.
+    for (const existing of existingRoleFiles) {
+      if (newRoleFilenames.has(existing)) continue;
+      outcomes.push({
+        path: `.agentpolicy/roles/${existing}`,
+        status: "skipped",
+        reason: "reconciliation aborted — could not canonicalize newly written roles",
+      });
     }
   }
 
