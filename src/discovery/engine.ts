@@ -67,15 +67,25 @@ export class DiscoveryEngine {
   /**
    * Engine-tracked consent for the one side effect Aegis can apply
    * automatically: appending the sensitive Aegis paths to .gitignore
-   * during the policy-write phase. Set via the [GITIGNORE_CONSENT]
-   * marker and cleared via [GITIGNORE_REVOKE], each gated on a
-   * different user-turn heuristic (affirmation for consent,
-   * retraction for revocation). The last accepted marker in the
-   * session wins — a human who consents and then changes their mind
-   * can say so and Aegis will emit the revoke, clearing the state
-   * before the write phase runs.
+   * during the policy-write phase. See gitignoreTopicOpen for the
+   * substate machine that scopes consent/revoke markers to a
+   * specific exchange rather than any matching user-turn signal.
    */
   private gitignoreConsent = false;
+
+  /**
+   * True while an Aegis ask about the session-log privacy choice is
+   * open and waiting for the human's answer. Set by the
+   * [GITIGNORE_ASK] marker, cleared after a [GITIGNORE_CONSENT] or
+   * [GITIGNORE_REVOKE] has been processed. Consent/revoke markers
+   * are honored ONLY in this substate — that stops a drifted
+   * [GITIGNORE_CONSENT] following an unrelated "yes" (about some
+   * other question) from silently latching consent, and stops a
+   * drifted [GITIGNORE_REVOKE] after an unrelated "don't do that"
+   * from silently clearing it. To retract later in the session,
+   * Aegis must re-emit [GITIGNORE_ASK] alongside the revoke.
+   */
+  private gitignoreTopicOpen = false;
 
   constructor(
     provider: LLMProvider,
@@ -143,45 +153,57 @@ export class DiscoveryEngine {
       // flow (still swallowed from the user-visible stream above)
       // and the conversation continues so the user can confirm.
 
-      // [GITIGNORE_CONSENT] records the human's authorization for
-      // Aegis to update .gitignore at write time. Three independent
-      // gates must all pass before consent latches:
+      // Gitignore-consent substate machine. The topic is "open" only
+      // while we're actively resolving the session-log privacy choice
+      // Aegis asked about via [GITIGNORE_ASK]. Consent and revoke
+      // markers are honored ONLY while the topic is open, so a
+      // drifted [GITIGNORE_CONSENT] following an unrelated "yes" or
+      // a drifted [GITIGNORE_REVOKE] following an unrelated "don't"
+      // cannot toggle the consent state without Aegis actually
+      // having asked the gitignore question and the user actually
+      // having answered it.
       //
-      //   1. isSimpleAffirmative(userInput) — same gate used for
-      //      [DISCOVERY_COMPLETE]; the user's most recent turn has
-      //      to read as an unambiguous "yes."
-      //   2. !containsTrailingQuestion(response) — Aegis's own
-      //      message cannot still be asking for confirmation; a
-      //      marker inside "want me to update gitignore too?"
-      //      would otherwise latch consent on the prior affirmation
-      //      about a different question.
-      //   3. The marker itself must appear, signaling Aegis's
-      //      intent.
-      //
-      // [GITIGNORE_REVOKE] is the symmetric retraction path. Gated
-      // on a retraction heuristic on the user turn so a drifted
-      // marker cannot silently clear consent the user actually gave.
+      // [GITIGNORE_ASK] in Aegis's response opens the topic.
+      // [GITIGNORE_CONSENT] or [GITIGNORE_REVOKE] in Aegis's NEXT
+      // response (the one answering the user's answer) closes it,
+      // successfully if the turn-heuristic gate passes and silently
+      // if not. Either way the topic closes — re-retracting later
+      // in the session requires Aegis to re-open with another
+      // [GITIGNORE_ASK] before emitting [GITIGNORE_REVOKE].
+      if (response.includes("[GITIGNORE_ASK]")) {
+        this.gitignoreTopicOpen = true;
+      }
+
       if (response.includes("[GITIGNORE_CONSENT]")) {
         if (
+          this.gitignoreTopicOpen &&
           isSimpleAffirmative(userInput) &&
           !containsTrailingQuestion(response)
         ) {
           this.gitignoreConsent = true;
         } else {
+          const reason = !this.gitignoreTopicOpen
+            ? "no open gitignore exchange — Aegis must emit [GITIGNORE_ASK] first"
+            : "affirmation missing or marker emitted in a question";
           process.stderr.write(
-            "[aegis] ignored [GITIGNORE_CONSENT] — affirmation missing or marker emitted in a question\n"
+            `[aegis] ignored [GITIGNORE_CONSENT] — ${reason}\n`
           );
         }
+        this.gitignoreTopicOpen = false;
       }
 
       if (response.includes("[GITIGNORE_REVOKE]")) {
-        if (isRetractionSignal(userInput)) {
+        if (this.gitignoreTopicOpen && isRetractionSignal(userInput)) {
           this.gitignoreConsent = false;
         } else {
+          const reason = !this.gitignoreTopicOpen
+            ? "no open gitignore exchange — Aegis must emit [GITIGNORE_ASK] first"
+            : "no retraction signal in user turn";
           process.stderr.write(
-            "[aegis] ignored [GITIGNORE_REVOKE] — no retraction signal in user turn\n"
+            `[aegis] ignored [GITIGNORE_REVOKE] — ${reason}\n`
           );
         }
+        this.gitignoreTopicOpen = false;
       }
 
       if (response.includes("[NO_CHANGES]")) {
@@ -278,6 +300,7 @@ export class DiscoveryEngine {
         if (
           span === "[DISCOVERY_COMPLETE]" ||
           span === "[NO_CHANGES]" ||
+          span === "[GITIGNORE_ASK]" ||
           span === "[GITIGNORE_CONSENT]" ||
           span === "[GITIGNORE_REVOKE]" ||
           /^\[READ_FILE:\s*.+\]$/.test(span)
@@ -312,6 +335,7 @@ export class DiscoveryEngine {
       const cleaned = buffer
         .replace(/\[DISCOVERY_COMPLETE\]/g, "")
         .replace(/\[NO_CHANGES\]/g, "")
+        .replace(/\[GITIGNORE_ASK\]/g, "")
         .replace(/\[GITIGNORE_CONSENT\]/g, "")
         .replace(/\[GITIGNORE_REVOKE\]/g, "")
         .replace(/\[READ_FILE:\s*[^\]]+\]/g, "");

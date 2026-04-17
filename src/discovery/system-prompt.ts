@@ -347,17 +347,21 @@ Near the end of discovery — after you've covered the extraction targets, befor
 2. Aegis adds the task to the handoff prompt so the next agent session handles it. Appropriate if the human wants to make the call in context later.
 3. The human handles .gitignore themselves. Appropriate for users with a custom ignore setup or private-by-default repos.
 
-Wait for the human to answer. You cannot record consent for option 1 until the human has affirmatively said yes ("do it", "go ahead", "yes", "looks good", etc.).
+Three control markers govern this exchange. The engine uses them to build a small state machine scoped to this specific question so a stray "yes" about some other topic can never latch gitignore consent.
 
-If the human picks option 1 and affirms, your acknowledgement message must end with the exact control marker [GITIGNORE_CONSENT] on its own (no brackets around other words, no surrounding description — the bracketed tag exactly). The engine reads that marker as a signal to apply the .gitignore update at write time, but ONLY after double-checking that BOTH (a) the user turn preceding the marker is an unambiguous affirmation AND (b) your message containing the marker is not itself asking a question. If either check fails, the engine drops the marker and the conversation continues. Write the marker only in the short acknowledgement message following the human's "yes" — not in the message where you ASK whether they want the update.
+STEP 1 — OPEN THE TOPIC. When you ASK the human about the session-log privacy choice, your message must end with [GITIGNORE_ASK] on its own. This tells the engine "Aegis is now waiting for the human's answer on the gitignore question." The topic stays open until a consent/revoke marker closes it.
 
-If option 2, include the task in the handoff prompt explicitly — "also update .gitignore to exclude .agentpolicy/sessions/ and .agentpolicy/state/overrides.jsonl before committing." Do not emit [GITIGNORE_CONSENT].
+STEP 2 — RECORD THE ANSWER. Wait for the human to answer. Their next turn is what the engine evaluates.
 
-If option 3, nothing happens. Respect the choice. Do not emit [GITIGNORE_CONSENT].
+- If the human picks option 1 AND affirms ("yes", "do it", "go ahead", "looks good"), your acknowledgement message must end with [GITIGNORE_CONSENT] on its own. The engine checks three things before latching consent: the topic is open (you emitted [GITIGNORE_ASK] in the prior turn), the user's turn reads as an unambiguous affirmation, and your acknowledgement message does not itself end in a question. If all three pass, consent is recorded and the topic closes. If any fail, the marker is dropped and consent is NOT recorded — the engine writes a one-line stderr notice so you can tell the difference from the outside.
 
-If the human later changes their mind — "actually, skip the gitignore thing" or "nevermind, don't touch it" — emit [GITIGNORE_REVOKE] in your acknowledgement message to clear the engine's recorded consent before the write phase runs. The engine gates this the same way: it only clears consent if the user's turn reads as a retraction ("skip", "don't", "nevermind", "cancel", "changed my mind", etc.). A spurious revoke marker without a real retraction is dropped.
+- If the human picks option 2, include the task in the handoff prompt explicitly ("also update .gitignore to exclude .agentpolicy/sessions/ and .agentpolicy/state/overrides.jsonl before committing") and do NOT emit [GITIGNORE_CONSENT]. The topic closes without a consent decision.
 
-Don't belabor this. Ask once, accept the answer, move on. If the human doesn't engage or deflects, default to option 2 (put it in the handoff) — it costs nothing and preserves their control.
+- If the human picks option 3, do nothing. Respect the choice. Do NOT emit [GITIGNORE_CONSENT]. The topic closes without a consent decision.
+
+STEP 3 — RETRACTION (OPTIONAL). If the human earlier consented and later changes their mind ("actually, skip the gitignore thing", "nevermind", "don't touch it"), you must re-open the topic and revoke in the same message: emit [GITIGNORE_ASK] AND [GITIGNORE_REVOKE] together in your acknowledgement. The engine clears consent only if the user's turn reads as a retraction ("skip", "don't", "nevermind", "cancel", "changed my mind", etc.); a revoke without a real retraction signal is dropped with a stderr notice.
+
+Markers must appear exactly as shown, including brackets, with no surrounding words. Don't belabor this — ask once, accept the answer, move on. If the human doesn't engage or deflects, default to option 2 (put it in the handoff) and do NOT emit any marker.
 
 == WHAT COUNTS AS A CHANGE ==
 

@@ -520,7 +520,12 @@ function existingCoversWanted(
 ): boolean {
   const existing = stripLeadingPathNoise(existingLine);
   const wanted = stripLeadingPathNoise(wantedPattern);
+
+  // Exact match, after leading-noise strip.
   if (existing === wanted) return true;
+
+  // Existing is broader-than-directory form of wanted: "foo" covers
+  // both "foo" and "foo/".
   if (
     wanted.endsWith("/") &&
     !existing.endsWith("/") &&
@@ -528,6 +533,23 @@ function existingCoversWanted(
   ) {
     return true;
   }
+
+  // Ancestor-directory coverage: an existing ignore that targets a
+  // parent directory already covers every descendant. Two spellings
+  // of the ancestor both count:
+  //   - "foo/" — directory pattern; covers foo/bar.txt, foo/sub/,
+  //     foo/sub/baz.
+  //   - "foo" without trailing slash — broader pattern; also covers
+  //     descendants because gitignore treats it as file-or-dir.
+  // Strict prefix test uses a "/" boundary so ".agent" does NOT get
+  // falsely credited with covering ".agentpolicy/sessions/" —
+  // "agent" is not an ancestor path component there.
+  if (existing.endsWith("/")) {
+    if (wanted.startsWith(existing)) return true;
+  } else if (wanted.startsWith(`${existing}/`)) {
+    return true;
+  }
+
   return false;
 }
 
