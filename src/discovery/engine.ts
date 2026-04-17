@@ -153,57 +153,81 @@ export class DiscoveryEngine {
       // flow (still swallowed from the user-visible stream above)
       // and the conversation continues so the user can confirm.
 
-      // Gitignore-consent substate machine. The topic is "open" only
-      // while we're actively resolving the session-log privacy choice
-      // Aegis asked about via [GITIGNORE_ASK]. Consent and revoke
-      // markers are honored ONLY while the topic is open, so a
-      // drifted [GITIGNORE_CONSENT] following an unrelated "yes" or
-      // a drifted [GITIGNORE_REVOKE] following an unrelated "don't"
-      // cannot toggle the consent state without Aegis actually
-      // having asked the gitignore question and the user actually
-      // having answered it.
+      // Gitignore-consent substate machine.
       //
-      // [GITIGNORE_ASK] in Aegis's response opens the topic.
-      // [GITIGNORE_CONSENT] or [GITIGNORE_REVOKE] in Aegis's NEXT
-      // response (the one answering the user's answer) closes it,
-      // successfully if the turn-heuristic gate passes and silently
-      // if not. Either way the topic closes — re-retracting later
-      // in the session requires Aegis to re-open with another
-      // [GITIGNORE_ASK] before emitting [GITIGNORE_REVOKE].
-      if (response.includes("[GITIGNORE_ASK]")) {
-        this.gitignoreTopicOpen = true;
-      }
+      // The topic must have been opened in a PRIOR assistant response
+      // — not the current one — before CONSENT can latch. This closes
+      // the loophole where an "[GITIGNORE_ASK][GITIGNORE_CONSENT]"
+      // pair in the same response would otherwise self-authorize on
+      // an unrelated user affirmation. The snapshot at the top of the
+      // turn captures state that was set by the PREVIOUS iteration's
+      // ASK, so an ASK and CONSENT emitted in the same response see
+      // topicWasOpenAtTurnStart === false.
+      //
+      // The topic closes unconditionally at the end of the first
+      // response after an ASK, regardless of which marker was (or
+      // wasn't) emitted. Options 2 and 3 of the system prompt — "put
+      // it in the handoff" and "user handles it themselves" — emit no
+      // marker, and the topic must still close or it would stay
+      // stuck open and a stray consent much later in the session
+      // could wrongly re-latch.
+      //
+      // REVOKE is asymmetric: it's valid when either the topic was
+      // open (same rule as CONSENT) OR when consent is already true
+      // and the user turn signals retraction. The second branch lets
+      // a user unilaterally retract mid-session without requiring a
+      // two-round-trip re-confirm, because the harm of a drifted
+      // revoke is recoverable (user re-consents) while the harm of a
+      // drifted consent is a silent write to their repo.
+      const topicWasOpenAtTurnStart = this.gitignoreTopicOpen;
 
       if (response.includes("[GITIGNORE_CONSENT]")) {
         if (
-          this.gitignoreTopicOpen &&
+          topicWasOpenAtTurnStart &&
           isSimpleAffirmative(userInput) &&
           !containsTrailingQuestion(response)
         ) {
           this.gitignoreConsent = true;
         } else {
-          const reason = !this.gitignoreTopicOpen
-            ? "no open gitignore exchange — Aegis must emit [GITIGNORE_ASK] first"
+          const reason = !topicWasOpenAtTurnStart
+            ? "no open gitignore exchange — [GITIGNORE_ASK] must come from a prior Aegis response"
             : "affirmation missing or marker emitted in a question";
           process.stderr.write(
             `[aegis] ignored [GITIGNORE_CONSENT] — ${reason}\n`
           );
         }
-        this.gitignoreTopicOpen = false;
       }
 
       if (response.includes("[GITIGNORE_REVOKE]")) {
-        if (this.gitignoreTopicOpen && isRetractionSignal(userInput)) {
+        const scopedToExchange =
+          topicWasOpenAtTurnStart || this.gitignoreConsent;
+        if (scopedToExchange && isRetractionSignal(userInput)) {
           this.gitignoreConsent = false;
         } else {
-          const reason = !this.gitignoreTopicOpen
-            ? "no open gitignore exchange — Aegis must emit [GITIGNORE_ASK] first"
+          const reason = !scopedToExchange
+            ? "no open gitignore exchange and no existing consent to revoke"
             : "no retraction signal in user turn";
           process.stderr.write(
             `[aegis] ignored [GITIGNORE_REVOKE] — ${reason}\n`
           );
         }
+      }
+
+      // After any post-ASK turn, close the topic — this covers both
+      // the happy path (CONSENT/REVOKE processed above) and the
+      // silent paths (options 2 and 3, where no marker is emitted at
+      // all). A later CONSENT without a fresh ASK is correctly denied.
+      if (topicWasOpenAtTurnStart) {
         this.gitignoreTopicOpen = false;
+      }
+
+      // Finally, process ASK last so its state change applies to the
+      // NEXT iteration, not the current one. An ASK-and-CONSENT pair
+      // in the same response leaves the topic open for the next turn
+      // (in case the human's answer is still coming) but does not
+      // let the pair self-authorize within one response.
+      if (response.includes("[GITIGNORE_ASK]")) {
+        this.gitignoreTopicOpen = true;
       }
 
       if (response.includes("[NO_CHANGES]")) {

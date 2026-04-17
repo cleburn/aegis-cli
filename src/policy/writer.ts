@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import ignoreLib from "ignore";
 import { validatePolicyObject, ROLE_NAME_PATTERN } from "./validator.js";
 
 export interface PolicyFiles {
@@ -481,76 +482,51 @@ const AEGIS_SANCTIONED_GITIGNORE_PATHS = new Set<string>([
 ]);
 
 /**
- * Strip leading-path-shape noise from a .gitignore pattern so
- * ".agentpolicy/sessions/", "/.agentpolicy/sessions/", and
- * "./.agentpolicy/sessions/" compare equal. Preserves trailing
- * slash because that is semantically significant — "foo/" matches
- * only directories, "foo" matches files or directories — and
- * confusing the two can either miss a needed ignore or falsely
- * claim coverage of a file by a directory-only pattern.
- */
-function stripLeadingPathNoise(pattern: string): string {
-  return pattern
-    .trim()
-    .replace(/^\/+/, "")
-    .replace(/^\.\//, "");
-}
-
-/**
- * True iff an existing .gitignore line already covers the ignore
- * our caller wants to add. Directional because gitignore trailing
- * slash is asymmetric:
+ * True iff an existing .gitignore line already covers the ignore our
+ * caller wants to add. Delegates the real work to the `ignore`
+ * library — the same spec-compliant parser we use to filter the
+ * scan — so gitignore semantics match what git actually does:
  *
- *   - "foo/" covers only directories named foo.
- *   - "foo" (no trailing slash) covers either — so "foo" in the
- *     file covers a request to add "foo/" because the broader
- *     pattern includes everything the narrower one does.
- *   - "foo.jsonl/" is a directory-only pattern and does NOT cover
- *     a request to ignore the FILE foo.jsonl, even though stripping
- *     the trailing slash would make them look equal.
+ *   - exact-match (".agentpolicy/sessions/" covers itself)
+ *   - leading "/" anchor ("/.agentpolicy/sessions/" covers the same)
+ *   - ancestor directory (".agentpolicy/" covers every descendant)
+ *   - glob "**" expansion (".agentpolicy/**" covers every descendant)
+ *   - filename glob (".agentpolicy/state/*.jsonl" covers overrides.jsonl)
+ *   - double-star at repo root ("**\/overrides.jsonl" matches)
  *
- * Exact-match (after leading-noise strip) always counts as coverage.
- * Otherwise, coverage only when the existing pattern is broader —
- * i.e. existing has no trailing slash, wanted has one, and they
- * agree on the stripped base.
+ * Directory vs file asymmetry is also handled correctly:
+ * "overrides.jsonl/" is a directory-only pattern and will NOT claim
+ * coverage of the FILE overrides.jsonl — the library enforces that
+ * trailing-slash semantics.
+ *
+ * We test coverage by asking the library "does this pattern ignore
+ * this concrete path." For directory wanted-patterns (trailing "/")
+ * we probe a sentinel descendant file so that a pattern matching the
+ * directory as a whole also matches. Exact-file wanted-patterns are
+ * tested verbatim.
  */
 function existingCoversWanted(
   existingLine: string,
   wantedPattern: string
 ): boolean {
-  const existing = stripLeadingPathNoise(existingLine);
-  const wanted = stripLeadingPathNoise(wantedPattern);
+  const existing = existingLine.trim();
+  const wanted = wantedPattern.trim();
+  if (existing.length === 0) return false;
 
-  // Exact match, after leading-noise strip.
-  if (existing === wanted) return true;
+  // Build a path the ignore library can match against. For directory
+  // wanted-patterns, use a stub descendant so parent-dir and ** globs
+  // count as coverage. The sentinel basename is distinctive so it
+  // does not accidentally match user-authored leaf patterns.
+  const probePath = wanted.endsWith("/")
+    ? `${wanted}__aegis_coverage_probe__`
+    : wanted.replace(/^\.\//, "").replace(/^\/+/, "");
 
-  // Existing is broader-than-directory form of wanted: "foo" covers
-  // both "foo" and "foo/".
-  if (
-    wanted.endsWith("/") &&
-    !existing.endsWith("/") &&
-    existing === wanted.replace(/\/+$/, "")
-  ) {
-    return true;
+  try {
+    const ig = ignoreLib().add(existing);
+    return ig.ignores(probePath);
+  } catch {
+    return false;
   }
-
-  // Ancestor-directory coverage: an existing ignore that targets a
-  // parent directory already covers every descendant. Two spellings
-  // of the ancestor both count:
-  //   - "foo/" — directory pattern; covers foo/bar.txt, foo/sub/,
-  //     foo/sub/baz.
-  //   - "foo" without trailing slash — broader pattern; also covers
-  //     descendants because gitignore treats it as file-or-dir.
-  // Strict prefix test uses a "/" boundary so ".agent" does NOT get
-  // falsely credited with covering ".agentpolicy/sessions/" —
-  // "agent" is not an ancestor path component there.
-  if (existing.endsWith("/")) {
-    if (wanted.startsWith(existing)) return true;
-  } else if (wanted.startsWith(`${existing}/`)) {
-    return true;
-  }
-
-  return false;
 }
 
 /**
