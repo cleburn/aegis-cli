@@ -429,7 +429,7 @@ function getDeps(pkg: Record<string, unknown> | undefined): string[] {
 }
 
 /** Hard ceiling — don't even attempt files larger than this */
-const MAX_FILE_SIZE_ABSOLUTE = 1024 * 1024; // 1MB
+export const MAX_FILE_SIZE_ABSOLUTE = 1024 * 1024; // 1MB
 
 // ── Document Parsers ──────────────────────────────────────────────────
 
@@ -476,10 +476,25 @@ export const UNSUPPORTED_BINARY = Symbol("unsupported-binary");
  * - Unknown binary files: returns UNSUPPORTED_BINARY symbol so the
  *   caller can flag it visibly in skippedSensitiveFiles.
  * Returns null if the file doesn't exist, can't be read, or exceeds 1MB.
+ *
+ * `opts.maxSize` overrides the default 10KB soft truncation cap.
+ * Scan-time reads use the default because they're dealing with many
+ * files and a tight shared context budget. User-initiated reads —
+ * Aegis asked to read a specific file mid-conversation via
+ * [READ_FILE: path] — should pass MAX_FILE_SIZE_ABSOLUTE so the
+ * whole file (up to the 1MB hard ceiling) comes through: truncating
+ * a user-requested read at 10KB defeats the purpose of the request.
  */
 export async function readFileSafe(
-  filePath: string
+  filePath: string,
+  opts: { maxSize?: number } = {}
 ): Promise<FileContent | null | typeof UNSUPPORTED_BINARY> {
+  const softCap = opts.maxSize ?? MAX_FILE_SIZE;
+  const humanCap =
+    softCap >= 1024 * 1024
+      ? `${(softCap / 1024 / 1024).toFixed(0)}MB`
+      : `${Math.round(softCap / 1024)}KB`;
+
   try {
     if (!fs.existsSync(filePath)) return null;
 
@@ -503,10 +518,10 @@ export async function readFileSafe(
       if (parser) {
         const extractedText = await parser(filePath);
         if (extractedText) {
-          const truncated = extractedText.length > MAX_FILE_SIZE;
+          const truncated = extractedText.length > softCap;
           const finalContent = truncated
-            ? extractedText.slice(0, MAX_FILE_SIZE) +
-              `\n\n[... truncated at 10KB — parsed from ${ext.slice(1).toUpperCase()} ...]`
+            ? extractedText.slice(0, softCap) +
+              `\n\n[... truncated at ${humanCap} — parsed from ${ext.slice(1).toUpperCase()} ...]`
             : extractedText;
           return {
             path: "", // caller sets this
@@ -522,11 +537,11 @@ export async function readFileSafe(
       return UNSUPPORTED_BINARY;
     }
 
-    // Plaintext path — unchanged
-    const truncated = stat.size > MAX_FILE_SIZE;
+    // Plaintext path
+    const truncated = stat.size > softCap;
     const content = fs.readFileSync(filePath, "utf-8");
     const finalContent = truncated
-      ? content.slice(0, MAX_FILE_SIZE) + "\n\n[... truncated at 10KB ...]"
+      ? content.slice(0, softCap) + `\n\n[... truncated at ${humanCap} ...]`
       : content;
 
     return {

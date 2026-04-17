@@ -17,6 +17,7 @@ import {
   isSensitiveFile,
   readFileSafe,
   UNSUPPORTED_BINARY,
+  MAX_FILE_SIZE_ABSOLUTE,
 } from "./scanner.js";
 import {
   buildDiscoverySystemPrompt,
@@ -468,7 +469,15 @@ export class DiscoveryEngine {
       );
     }
 
-    const result = await readFileSafe(absolutePath);
+    // User-initiated reads opt out of the scan-time 10KB soft cap.
+    // The scan cap exists to ration context across many files read
+    // at once; here the human explicitly asked for ONE file and
+    // expects its full contents. Using MAX_FILE_SIZE_ABSOLUTE means
+    // files up to 1MB come through whole — only files over the
+    // 1MB hard ceiling are refused outright.
+    const result = await readFileSafe(absolutePath, {
+      maxSize: MAX_FILE_SIZE_ABSOLUTE,
+    });
     if (result === null) {
       return framed(
         `Read failed: "${resolvedRelative}" could not be read — it may not exist, may be too large (>1MB), or may be unreadable.`
@@ -481,7 +490,7 @@ export class DiscoveryEngine {
     }
 
     const truncatedNote = result.truncated
-      ? " [Content was truncated at 10KB.]"
+      ? " [Content was truncated at 1MB — file exceeded the read ceiling.]"
       : "";
     return framed(
       `Contents of ${resolvedRelative}:${truncatedNote}`,
