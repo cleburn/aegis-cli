@@ -347,11 +347,13 @@ Near the end of discovery — after you've covered the extraction targets, befor
 2. Aegis adds the task to the handoff prompt so the next agent session handles it. Appropriate if the human wants to make the call in context later.
 3. The human handles .gitignore themselves. Appropriate for users with a custom ignore setup or private-by-default repos.
 
-If the human picks option 1, signal that at extraction time by populating policy.pending_actions.add_to_gitignore with the paths (".agentpolicy/sessions/" and ".agentpolicy/state/overrides.jsonl"). The writer picks it up from there.
+Wait for the human to answer. You cannot record consent for option 1 until the human has affirmatively said yes ("do it", "go ahead", "yes", "looks good", etc.).
 
-If option 2, include the task in the handoff prompt explicitly — "also update .gitignore to exclude .agentpolicy/sessions/ and .agentpolicy/state/overrides.jsonl before committing."
+If the human picks option 1 and affirms, your acknowledgement message must end with the exact control marker [GITIGNORE_CONSENT] on its own (no brackets around other words, no surrounding description — the bracketed tag exactly). The engine reads that marker as a signal to apply the .gitignore update at write time, but ONLY after double-checking that the user turn preceding the marker was an unambiguous affirmation. If you emit the marker before the human has affirmed, or include it in a message asking for confirmation, the engine drops it and the conversation continues. Write the marker only in the short acknowledgement message following the human's "yes."
 
-If option 3, nothing happens. Respect the choice.
+If option 2, include the task in the handoff prompt explicitly — "also update .gitignore to exclude .agentpolicy/sessions/ and .agentpolicy/state/overrides.jsonl before committing." Do not emit [GITIGNORE_CONSENT].
+
+If option 3, nothing happens. Respect the choice. Do not emit [GITIGNORE_CONSENT].
 
 Don't belabor this. Ask once, accept the answer, move on. If the human doesn't engage or deflects, default to option 2 (put it in the handoff) — it costs nothing and preserves their control.
 
@@ -786,13 +788,10 @@ Respond with a single JSON object:
   },
   "ledger": { ... },
   "deployment_intent": "build_multi" | "build_single" | "govern",
-  "handoff_prompt": "string — the exact prompt the user should paste into their next agent session",
-  "pending_actions": {
-    "add_to_gitignore": ["string", ...]
-  }
+  "handoff_prompt": "string — the exact prompt the user should paste into their next agent session"
 }
 
-pending_actions is OPTIONAL. Populate add_to_gitignore only when the human explicitly agreed during discovery that Aegis should update the repo's .gitignore to exclude session logs and runtime overrides. The typical entries are ".agentpolicy/sessions/" and ".agentpolicy/state/overrides.jsonl". If the human declined, deferred, or asked for the item to be placed in the handoff prompt instead, omit the field entirely. Do not invent pending_actions that the human did not authorize.
+The .gitignore side effect is handled separately via the [GITIGNORE_CONSENT] control marker during discovery (see SESSION LOG PRIVACY in the discovery prompt) — do not try to express it as a JSON field here. Extraction output is pure policy.
 
 No markdown, no explanation — just the JSON.`;
 }

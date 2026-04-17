@@ -496,6 +496,24 @@ function normalizeIgnorePattern(pattern: string): string {
 }
 
 /**
+ * Normalize a full .gitignore file for the concurrent-edit race
+ * check. Collapses formatting-only differences — CRLF to LF, stripped
+ * trailing whitespace per line, stripped trailing blank lines — so a
+ * benign editor save (e.g. a linter adding a final newline) does not
+ * falsely trigger the "modified during update window" skip. Semantic
+ * ignore content is preserved: line order, non-blank content, and
+ * comment lines all stay comparable.
+ */
+function normalizeGitignoreForRaceCheck(content: string): string {
+  return content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/, ""))
+    .join("\n")
+    .replace(/\n+$/, "");
+}
+
+/**
  * Append the given entries to the repo's .gitignore if they are not
  * already present. Called by the init command when the human opted
  * into Aegis managing .gitignore during discovery (pending_actions.
@@ -584,11 +602,14 @@ export function updateGitignoreEntries(
 
   // Re-read immediately before the atomic rename to detect concurrent
   // writes (a git hook, a concurrent editor, another aegis run if the
-  // lock was bypassed). If the file changed since our initial read,
-  // refuse to clobber the concurrent change — skipped is safer than
-  // silent loss of unrelated edits. Not a perfect race closer (the
-  // rename still happens slightly after this re-read) but the window
-  // shrinks from tens of milliseconds to microseconds.
+  // lock was bypassed). If the file changed meaningfully since our
+  // initial read, refuse to clobber — skipped is safer than silent
+  // loss of unrelated edits. Comparison is on a normalized form so
+  // a harmless formatting-only change (trailing newline added by a
+  // linter, CRLF→LF conversion) does not trigger a spurious skip.
+  // Not a perfect race closer; the window between this re-read and
+  // the rename shrinks from tens of ms to microseconds but is not
+  // zero.
   let current = "";
   try {
     if (fs.existsSync(gitignorePath)) {
@@ -597,7 +618,10 @@ export function updateGitignoreEntries(
   } catch {
     // Treat as missing — we'll create from scratch on rename
   }
-  if (current !== existing) {
+  if (
+    normalizeGitignoreForRaceCheck(current) !==
+    normalizeGitignoreForRaceCheck(existing)
+  ) {
     return {
       path: ".gitignore",
       status: "skipped",

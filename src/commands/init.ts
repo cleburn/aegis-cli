@@ -118,16 +118,19 @@ export async function initCommand(): Promise<void> {
     if (result.status === "completed" && result.policy) {
       fileOutcomes = writePolicy(cwd, result.policy);
 
-      // Honor pending_actions.add_to_gitignore if the human opted in
-      // during discovery. The engine's system prompt gives Aegis three
-      // options to offer the user (inline update, defer to handoff,
-      // user-managed); this branch only runs when option 1 was
-      // selected and extraction populated the field. The resulting
-      // WriteOutcome is folded into the files-created manifest so the
-      // user sees exactly what was touched.
-      const gitignoreEntries = result.policy.pending_actions?.add_to_gitignore;
-      if (gitignoreEntries && gitignoreEntries.length > 0) {
-        const outcome = updateGitignoreEntries(cwd, gitignoreEntries);
+      // Apply the .gitignore side effect ONLY if the engine recorded
+      // an affirmed [GITIGNORE_CONSENT] marker during discovery. The
+      // paths themselves are hardcoded to the Aegis-sanctioned set —
+      // the LLM cannot influence which paths get written, only
+      // whether anything gets written at all (and that decision is
+      // cross-checked against the user's conversation turns by the
+      // engine's affirmation gate, not taken on faith from the
+      // extraction output).
+      if (engine.getGitignoreConsent()) {
+        const outcome = updateGitignoreEntries(cwd, [
+          ".agentpolicy/sessions/",
+          ".agentpolicy/state/overrides.jsonl",
+        ]);
         if (outcome) fileOutcomes.push(outcome);
       }
 

@@ -45,18 +45,6 @@ export interface DiscoveryResult {
     deployment_intent: "build_multi" | "build_single" | "govern";
     /** Custom handoff prompt crafted by the extraction LLM from the full conversation context */
     handoff_prompt: string;
-    /**
-     * Optional side-effects the human authorized during discovery but
-     * that extraction compiles into structured form. Currently used
-     * only for auto-appending sensitive Aegis paths to .gitignore
-     * when the human explicitly opted into Aegis doing it inline
-     * rather than deferring to the handoff or handling it manually.
-     * Absent or empty means no side effects beyond the standard
-     * policy writes.
-     */
-    pending_actions?: {
-      add_to_gitignore?: string[];
-    };
   } | null;
   /**
    * How the discovery conversation concluded.
@@ -76,6 +64,16 @@ export class DiscoveryEngine {
   private ui: TerminalUI;
   private messages: Message[] = [];
   private systemPrompt: string;
+  /**
+   * Engine-tracked consent for the one side effect Aegis can apply
+   * automatically: appending the sensitive Aegis paths to .gitignore
+   * during the policy-write phase. Set only via the [GITIGNORE_CONSENT]
+   * marker, and only when the user's preceding turn is an unambiguous
+   * affirmation (same isSimpleAffirmative gate as [DISCOVERY_COMPLETE]).
+   * init reads this via getGitignoreConsent — the engine's state, not
+   * the LLM's extraction output, is the authorization of record.
+   */
+  private gitignoreConsent = false;
 
   constructor(
     provider: LLMProvider,
@@ -142,6 +140,25 @@ export class DiscoveryEngine {
       // When a gate fails, the marker is dropped from the control
       // flow (still swallowed from the user-visible stream above)
       // and the conversation continues so the user can confirm.
+
+      // [GITIGNORE_CONSENT] records the human's authorization for
+      // Aegis to update .gitignore at write time. Honored only when
+      // the user's most recent turn is an unambiguous affirmation —
+      // same gate as [DISCOVERY_COMPLETE] — so a prompt drift that
+      // emits the marker without a real user "yes" cannot trigger
+      // the side effect. One-way: once consent is on record for the
+      // session, it stays on. A human who changes their mind should
+      // re-run aegis init rather than relying on an un-consent path.
+      if (response.includes("[GITIGNORE_CONSENT]")) {
+        if (isSimpleAffirmative(userInput)) {
+          this.gitignoreConsent = true;
+        } else {
+          process.stderr.write(
+            "[aegis] ignored [GITIGNORE_CONSENT] — no unambiguous user affirmation on record\n"
+          );
+        }
+        // Not a terminal marker — fall through and keep the loop going.
+      }
 
       if (response.includes("[NO_CHANGES]")) {
         if (!isNoChangeConfirmation(userInput) || containsTrailingQuestion(response)) {
@@ -237,10 +254,11 @@ export class DiscoveryEngine {
         if (
           span === "[DISCOVERY_COMPLETE]" ||
           span === "[NO_CHANGES]" ||
+          span === "[GITIGNORE_CONSENT]" ||
           /^\[READ_FILE:\s*.+\]$/.test(span)
         ) {
           // Swallow silently — the full response string still has these,
-          // so downstream marker checks (completion, read) work.
+          // so downstream marker checks (completion, read, consent) work.
           buffer = rest;
           continue;
         }
@@ -269,6 +287,7 @@ export class DiscoveryEngine {
       const cleaned = buffer
         .replace(/\[DISCOVERY_COMPLETE\]/g, "")
         .replace(/\[NO_CHANGES\]/g, "")
+        .replace(/\[GITIGNORE_CONSENT\]/g, "")
         .replace(/\[READ_FILE:\s*[^\]]+\]/g, "");
       if (cleaned.length > 0) {
         this.ui.streamToken(cleaned);
@@ -445,6 +464,18 @@ export class DiscoveryEngine {
    */
   getTranscript(): Message[] {
     return [...this.messages];
+  }
+
+  /**
+   * True iff the human explicitly authorized Aegis to update .gitignore
+   * during this session via an affirmed [GITIGNORE_CONSENT] marker.
+   * The init command reads this to decide whether to append the
+   * sanctioned Aegis paths to .gitignore after writePolicy. The
+   * extraction output has no authority here — consent lives in the
+   * engine's state, verified against the user's conversation turns.
+   */
+  getGitignoreConsent(): boolean {
+    return this.gitignoreConsent;
   }
 
   /**
