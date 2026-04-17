@@ -591,7 +591,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 
 {
   "$schema": "https://aegis.dev/schema/constitution.v0.1.0.json",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "project": {
     "name": "string (required)",
     "purpose": "string, 1-3 sentences (required)",
@@ -618,7 +618,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 
 {
   "$schema": "https://aegis.dev/schema/governance.v0.1.0.json",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "autonomy": {
     "default_level": "conservative|advisory|delegated (required)",
     "domains": { "domain_name": "conservative|advisory|delegated" }
@@ -667,7 +667,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 
 {
   "$schema": "https://aegis.dev/schema/role.v0.1.0.json",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "role": {
     "name": "string (required)",
     "purpose": "string (required)"
@@ -683,7 +683,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 
 {
   "$schema": "https://aegis.dev/schema/ledger.v0.1.0.json",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "sequence": 0,
   "tasks": [],
   "write_protocol": {
