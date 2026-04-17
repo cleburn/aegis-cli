@@ -93,7 +93,7 @@
           },
           "summary": {
             "type": "string",
-            "maxLength": 300,
+            "maxLength": 600,
             "description": "What this task is doing, in one to two sentences."
           },
           "assigned_role": {
@@ -123,7 +123,7 @@
           },
           "blocked_reason": {
             "type": "string",
-            "maxLength": 300,
+            "maxLength": 600,
             "description": "If status is 'blocked', explain why."
           },
           "failure_log": {
@@ -132,12 +132,12 @@
             "properties": {
               "approach": {
                 "type": "string",
-                "maxLength": 500,
+                "maxLength": 1500,
                 "description": "What was attempted."
               },
               "error": {
                 "type": "string",
-                "maxLength": 500,
+                "maxLength": 1500,
                 "description": "What went wrong."
               },
               "attempted_at": {
@@ -157,7 +157,7 @@
             "properties": {
               "summary": {
                 "type": "string",
-                "maxLength": 300,
+                "maxLength": 600,
                 "description": "What was accomplished."
               },
               "files_created": {
@@ -198,7 +198,7 @@
                 },
                 "content": {
                   "type": "string",
-                  "maxLength": 500
+                  "maxLength": 1500
                 }
               },
               "additionalProperties": true
@@ -230,7 +230,7 @@
           },
           "reason": {
             "type": "string",
-            "maxLength": 200,
+            "maxLength": 600,
             "description": "Why this lock was acquired."
           },
           "expires_at": {

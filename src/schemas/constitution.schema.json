@@ -28,7 +28,7 @@
         },
         "purpose": {
           "type": "string",
-          "maxLength": 500,
+          "maxLength": 1500,
           "description": "A concise statement of what this project is and why it exists. One to three sentences maximum. This anchors every decision an agent makes.",
           "examples": ["A B2B SaaS platform for inventory management, serving mid-size retail companies. Speed and reliability are prioritized over feature breadth."]
         },
@@ -51,8 +51,8 @@
               },
               "purpose": {
                 "type": "string",
-                "maxLength": 200,
-                "description": "What this module does, in one sentence."
+                "maxLength": 600,
+                "description": "What this module does, in one sentence. For complex modules with multiple responsibilities or compliance context, longer descriptions are allowed."
               },
               "owner": {
                 "type": "string",
@@ -82,12 +82,12 @@
               },
               "purpose": {
                 "type": "string",
-                "maxLength": 200,
-                "description": "What this file is for and what it should contain, in one sentence."
+                "maxLength": 600,
+                "description": "What this file is for and what it should contain."
               },
               "source": {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 600,
                 "description": "Where the content should be derived from, if applicable.",
                 "examples": ["Derived from charter.md and constitution.json", "Standard MIT license text", "Runs build_commands from constitution against quality_gate flags from governance"]
               }
@@ -138,7 +138,7 @@
               "name": { "type": "string" },
               "purpose": {
                 "type": "string",
-                "maxLength": 100,
+                "maxLength": 400,
                 "description": "What this library is used for."
               },
               "scope": {
@@ -167,8 +167,8 @@
           },
           "statement": {
             "type": "string",
-            "maxLength": 500,
-            "description": "The principle expressed as a clear directive.",
+            "maxLength": 1500,
+            "description": "The principle expressed as a clear directive. Regulatory or compliance context can make principles longer — that's allowed.",
             "examples": ["Reliability is more important than speed of delivery. Never ship something that is not thoroughly tested."]
           },
           "priority": {
@@ -202,7 +202,7 @@
             "properties": {
               "name": { "type": "string" },
               "command": { "type": "string" },
-              "purpose": { "type": "string", "maxLength": 100 }
+              "purpose": { "type": "string", "maxLength": 400 }
             }
           }
         }

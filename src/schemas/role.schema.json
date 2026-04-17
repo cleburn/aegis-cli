@@ -28,7 +28,7 @@
         },
         "purpose": {
           "type": "string",
-          "maxLength": 500,
+          "maxLength": 1500,
           "description": "What this role is responsible for. The job description.",
           "examples": [
             "Full-scope development across the entire codebase.",

@@ -131,8 +131,8 @@
               },
               "reason": {
                 "type": "string",
-                "maxLength": 100,
-                "description": "Why this is sensitive."
+                "maxLength": 400,
+                "description": "Why this is sensitive. Compliance framework context (e.g. PCI-DSS control, CMMC practice, NIST reference) is worth including when relevant."
               }
             },
             "additionalProperties": true
@@ -190,7 +190,7 @@
                 "properties": {
                   "name": { "type": "string" },
                   "command": { "type": "string" },
-                  "description": { "type": "string", "maxLength": 100 }
+                  "description": { "type": "string", "maxLength": 400 }
                 },
                 "additionalProperties": true
               }
@@ -246,8 +246,8 @@
           },
           "rationale": {
             "type": "string",
-            "maxLength": 200,
-            "description": "Brief explanation of why this convention exists. Helps agents make judgment calls in edge cases."
+            "maxLength": 600,
+            "description": "Explanation of why this convention exists. Helps agents make judgment calls in edge cases. Compliance-driven conventions should cite the framework (HIPAA, PCI-DSS, CMMC, etc.) and rationale."
           }
         },
         "additionalProperties": true
@@ -309,12 +309,12 @@
             },
             "policy_text": {
               "type": "string",
-              "maxLength": 500,
+              "maxLength": 1500,
               "description": "The full text or summary of the policy that was violated, so the log is self-contained and readable without cross-referencing."
             },
             "action_requested": {
               "type": "string",
-              "maxLength": 500,
+              "maxLength": 1500,
               "description": "What the human instructed the agent to do."
             },
             "human_confirmed": {
@@ -328,7 +328,7 @@
             },
             "rationale": {
               "type": "string",
-              "maxLength": 500,
+              "maxLength": 1500,
               "description": "Optional rationale provided by the human for why the override is necessary."
             }
           },
