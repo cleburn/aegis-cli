@@ -513,17 +513,27 @@ function existingCoversWanted(
   const wanted = wantedPattern.trim();
   if (existing.length === 0) return false;
 
-  // Build a path the ignore library can match against. For directory
-  // wanted-patterns, use a stub descendant so parent-dir and ** globs
-  // count as coverage. The sentinel basename is distinctive so it
-  // does not accidentally match user-authored leaf patterns.
-  const probePath = wanted.endsWith("/")
-    ? `${wanted}__aegis_coverage_probe__`
-    : wanted.replace(/^\.\//, "").replace(/^\/+/, "");
+  // Build paths the ignore library can match against. For directory
+  // wanted-patterns, two distinct descendant probes are used — the
+  // existing pattern has to cover BOTH to claim coverage. A single
+  // probe basename could theoretically be matched by a user-authored
+  // literal or glob that happens to spell the same string; requiring
+  // two disjoint probes makes that collision vanishingly unlikely
+  // while still letting real parent-dir and ** globs cover both.
+  // Exact-file wanted-patterns are tested verbatim (one path).
+  let probePaths: string[];
+  if (wanted.endsWith("/")) {
+    probePaths = [
+      `${wanted}__aegis_probe_alpha__.dat`,
+      `${wanted}__aegis_probe_bravo__.dat`,
+    ];
+  } else {
+    probePaths = [wanted.replace(/^\.\//, "").replace(/^\/+/, "")];
+  }
 
   try {
     const ig = ignoreLib().add(existing);
-    return ig.ignores(probePath);
+    return probePaths.every((p) => ig.ignores(p));
   } catch {
     return false;
   }
