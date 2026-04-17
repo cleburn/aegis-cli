@@ -67,11 +67,13 @@ export class DiscoveryEngine {
   /**
    * Engine-tracked consent for the one side effect Aegis can apply
    * automatically: appending the sensitive Aegis paths to .gitignore
-   * during the policy-write phase. Set only via the [GITIGNORE_CONSENT]
-   * marker, and only when the user's preceding turn is an unambiguous
-   * affirmation (same isSimpleAffirmative gate as [DISCOVERY_COMPLETE]).
-   * init reads this via getGitignoreConsent — the engine's state, not
-   * the LLM's extraction output, is the authorization of record.
+   * during the policy-write phase. Set via the [GITIGNORE_CONSENT]
+   * marker and cleared via [GITIGNORE_REVOKE], each gated on a
+   * different user-turn heuristic (affirmation for consent,
+   * retraction for revocation). The last accepted marker in the
+   * session wins — a human who consents and then changes their mind
+   * can say so and Aegis will emit the revoke, clearing the state
+   * before the write phase runs.
    */
   private gitignoreConsent = false;
 
@@ -142,22 +144,44 @@ export class DiscoveryEngine {
       // and the conversation continues so the user can confirm.
 
       // [GITIGNORE_CONSENT] records the human's authorization for
-      // Aegis to update .gitignore at write time. Honored only when
-      // the user's most recent turn is an unambiguous affirmation —
-      // same gate as [DISCOVERY_COMPLETE] — so a prompt drift that
-      // emits the marker without a real user "yes" cannot trigger
-      // the side effect. One-way: once consent is on record for the
-      // session, it stays on. A human who changes their mind should
-      // re-run aegis init rather than relying on an un-consent path.
+      // Aegis to update .gitignore at write time. Three independent
+      // gates must all pass before consent latches:
+      //
+      //   1. isSimpleAffirmative(userInput) — same gate used for
+      //      [DISCOVERY_COMPLETE]; the user's most recent turn has
+      //      to read as an unambiguous "yes."
+      //   2. !containsTrailingQuestion(response) — Aegis's own
+      //      message cannot still be asking for confirmation; a
+      //      marker inside "want me to update gitignore too?"
+      //      would otherwise latch consent on the prior affirmation
+      //      about a different question.
+      //   3. The marker itself must appear, signaling Aegis's
+      //      intent.
+      //
+      // [GITIGNORE_REVOKE] is the symmetric retraction path. Gated
+      // on a retraction heuristic on the user turn so a drifted
+      // marker cannot silently clear consent the user actually gave.
       if (response.includes("[GITIGNORE_CONSENT]")) {
-        if (isSimpleAffirmative(userInput)) {
+        if (
+          isSimpleAffirmative(userInput) &&
+          !containsTrailingQuestion(response)
+        ) {
           this.gitignoreConsent = true;
         } else {
           process.stderr.write(
-            "[aegis] ignored [GITIGNORE_CONSENT] — no unambiguous user affirmation on record\n"
+            "[aegis] ignored [GITIGNORE_CONSENT] — affirmation missing or marker emitted in a question\n"
           );
         }
-        // Not a terminal marker — fall through and keep the loop going.
+      }
+
+      if (response.includes("[GITIGNORE_REVOKE]")) {
+        if (isRetractionSignal(userInput)) {
+          this.gitignoreConsent = false;
+        } else {
+          process.stderr.write(
+            "[aegis] ignored [GITIGNORE_REVOKE] — no retraction signal in user turn\n"
+          );
+        }
       }
 
       if (response.includes("[NO_CHANGES]")) {
@@ -255,6 +279,7 @@ export class DiscoveryEngine {
           span === "[DISCOVERY_COMPLETE]" ||
           span === "[NO_CHANGES]" ||
           span === "[GITIGNORE_CONSENT]" ||
+          span === "[GITIGNORE_REVOKE]" ||
           /^\[READ_FILE:\s*.+\]$/.test(span)
         ) {
           // Swallow silently — the full response string still has these,
@@ -288,6 +313,7 @@ export class DiscoveryEngine {
         .replace(/\[DISCOVERY_COMPLETE\]/g, "")
         .replace(/\[NO_CHANGES\]/g, "")
         .replace(/\[GITIGNORE_CONSENT\]/g, "")
+        .replace(/\[GITIGNORE_REVOKE\]/g, "")
         .replace(/\[READ_FILE:\s*[^\]]+\]/g, "");
       if (cleaned.length > 0) {
         this.ui.streamToken(cleaned);
@@ -757,4 +783,33 @@ function isNoChangeConfirmation(userInput: string): boolean {
     "we're all set",
   ];
   return noChangePhrases.some((p) => trimmed.includes(p));
+}
+
+/**
+ * Heuristic for "the user is retracting or declining something." Used
+ * to gate [GITIGNORE_REVOKE] so a drifted marker cannot silently
+ * clear consent the user actually granted earlier in the session.
+ * Conservative in the opposite direction of isSimpleAffirmative —
+ * false negatives mean a legitimate retraction gets ignored and the
+ * user can rephrase; false positives mean we accept a spurious
+ * revoke and the user loses an opt-in they made (recoverable by
+ * re-opting-in, which is cheap).
+ */
+function isRetractionSignal(userInput: string): boolean {
+  const trimmed = userInput.trim().toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 200) return false;
+  if (trimmed.includes("?")) return false;
+
+  const retractionTokens = [
+    "skip", "don't", "dont",
+    "cancel", "revoke", "undo", "nevermind",
+    "scratch that", "retract", "forget it",
+    "change my mind", "changed my mind",
+    "actually no", "actually, no",
+    "no thanks", "no thank you",
+    "not anymore", "never mind",
+    "leave it", "hands off",
+    "stop",
+  ];
+  return retractionTokens.some((t) => trimmed.includes(t));
 }

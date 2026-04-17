@@ -481,18 +481,54 @@ const AEGIS_SANCTIONED_GITIGNORE_PATHS = new Set<string>([
 ]);
 
 /**
- * Normalize a .gitignore pattern for equivalence comparison. Handles
- * the three common variant spellings that all mean the same ignore:
- * a leading "/", a leading "./", and a trailing "/". Returned strings
- * are not written back — they're only used as comparison keys when
- * deciding whether an existing file already covers a requested entry.
+ * Strip leading-path-shape noise from a .gitignore pattern so
+ * ".agentpolicy/sessions/", "/.agentpolicy/sessions/", and
+ * "./.agentpolicy/sessions/" compare equal. Preserves trailing
+ * slash because that is semantically significant — "foo/" matches
+ * only directories, "foo" matches files or directories — and
+ * confusing the two can either miss a needed ignore or falsely
+ * claim coverage of a file by a directory-only pattern.
  */
-function normalizeIgnorePattern(pattern: string): string {
+function stripLeadingPathNoise(pattern: string): string {
   return pattern
     .trim()
     .replace(/^\/+/, "")
-    .replace(/^\.\//, "")
-    .replace(/\/+$/, "");
+    .replace(/^\.\//, "");
+}
+
+/**
+ * True iff an existing .gitignore line already covers the ignore
+ * our caller wants to add. Directional because gitignore trailing
+ * slash is asymmetric:
+ *
+ *   - "foo/" covers only directories named foo.
+ *   - "foo" (no trailing slash) covers either — so "foo" in the
+ *     file covers a request to add "foo/" because the broader
+ *     pattern includes everything the narrower one does.
+ *   - "foo.jsonl/" is a directory-only pattern and does NOT cover
+ *     a request to ignore the FILE foo.jsonl, even though stripping
+ *     the trailing slash would make them look equal.
+ *
+ * Exact-match (after leading-noise strip) always counts as coverage.
+ * Otherwise, coverage only when the existing pattern is broader —
+ * i.e. existing has no trailing slash, wanted has one, and they
+ * agree on the stripped base.
+ */
+function existingCoversWanted(
+  existingLine: string,
+  wantedPattern: string
+): boolean {
+  const existing = stripLeadingPathNoise(existingLine);
+  const wanted = stripLeadingPathNoise(wantedPattern);
+  if (existing === wanted) return true;
+  if (
+    wanted.endsWith("/") &&
+    !existing.endsWith("/") &&
+    existing === wanted.replace(/\/+$/, "")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -508,7 +544,14 @@ function normalizeGitignoreForRaceCheck(content: string): string {
   return content
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .map((line) => line.replace(/[ \t]+$/, ""))
+    .map((line) => {
+      // Preserve escaped trailing whitespace ("\ " or "\\t") because
+      // in gitignore an escaped space/tab is a semantically significant
+      // part of the pattern. The (?<!\\) lookbehind asserts "not
+      // preceded by a backslash" so "foo\ " keeps its trailing space
+      // while ordinary "foo   " loses its trailing indentation.
+      return line.replace(/(?<!\\)[ \t]+$/, "");
+    })
     .join("\n")
     .replace(/\n+$/, "");
 }
@@ -577,19 +620,17 @@ export function updateGitignoreEntries(
     };
   }
 
-  // Normalize existing patterns for equivalence comparison so a
-  // pre-existing "/.agentpolicy/sessions/" or ".agentpolicy/sessions"
-  // entry prevents Aegis from adding an exact-spelling duplicate.
-  const existingNormalized = new Set(
-    existing
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("#"))
-      .map(normalizeIgnorePattern)
-  );
+  // Collect non-comment lines from existing .gitignore, then for each
+  // wanted entry check via existingCoversWanted — which is directional
+  // about trailing-slash semantics so a directory-only "foo/" never
+  // falsely claims coverage of a file "foo".
+  const existingLines = existing
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"));
 
   const missing = wanted.filter(
-    (e) => !existingNormalized.has(normalizeIgnorePattern(e))
+    (w) => !existingLines.some((e) => existingCoversWanted(e, w))
   );
   if (missing.length === 0) {
     return { path: ".gitignore", status: "unchanged" };
