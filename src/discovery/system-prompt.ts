@@ -799,15 +799,9 @@ Respond with a single JSON object:
 
 The .gitignore side effect is handled separately via the [GITIGNORE_CONSENT] control marker during discovery (see SESSION LOG PRIVACY in the discovery prompt) — do not try to express it as a JSON field here. Extraction output is pure policy.
 
-STRING LENGTH LIMITS:
+LENGTH GUIDANCE:
 
-Schema caps apply to specific string fields. Stay well under these so validation passes on the first extraction attempt. For enterprise or compliance-heavy projects with regulatory context (PCI-DSS, HIPAA, CMMC, ITAR, SOX, FedRAMP), use the room — the caps are sized to accommodate real compliance rationale, not to force terseness.
-
-- 400 characters: constitution.tech_stack.key_libraries[].purpose, constitution.build_commands.custom[].purpose, governance.sensitive_patterns[].reason, governance.quality_gate.pre_commit.custom_checks[].description
-- 600 characters: constitution.project.module_map[].purpose, constitution.project.required_artifacts[].purpose and .source, governance.conventions[].rationale, ledger.tasks[].summary and .blocked_reason and .outcome.summary, ledger.locks[].reason
-- 1500 characters: constitution.project.purpose, constitution.principles[].statement, role.role.purpose, governance.override_protocol.log_entry_schema.policy_text / .action_requested / .rationale, ledger.tasks[].failure_log.approach / .error / .notes[].content
-
-Match length to substance. A simple module might need 80 characters for its purpose. A compliance-gated orchestration module with regulatory context can use 400+. Don't pad to fill the cap; don't cut substance to stay terse.
+The spec defines no maximum string lengths and no item-count ceilings — every text field is sized to substance. A simple module might need 80 characters for its purpose. A compliance-gated orchestration module with regulatory context uses as much room as the substance requires. For enterprise or compliance-heavy projects (PCI-DSS, HIPAA, CMMC, ITAR, SOX, FedRAMP), use the room you need — regulatory rationale, framework citations, and full policy statements all belong in the policy verbatim. Don't pad to fill space; don't cut substance to stay terse.
 
 No markdown, no explanation — just the JSON.`;
 }
