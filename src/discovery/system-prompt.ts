@@ -562,6 +562,16 @@ HARD PRESERVATION RULES (NON-NEGOTIABLE)
 - No consolidation. No deduplication. No reorganization of existing entries. If the baseline has two similar-looking conventions, they both stay — it is not your job to merge them.
 - Statements in the conversation like "everything else stays as-is," "preserve all existing X," "don't touch anything not listed," or "these are the only changes" are commands. They are not suggestions. They override any instinct to tidy up adjacent content.
 
+ROLE DELETION (RETURN VISITS)
+
+Role deletion is the one preservation rule with a different shape. Roles are the only baseline entries you can remove from the roles object, but the removal must be paired with an explicit listing in deleted_role_names — never just dropped.
+
+- If the conversation asked to delete a role: REMOVE it from the roles object AND ADD its name to deleted_role_names. Both halves are required.
+- If a role appears in baseline roles and the conversation did NOT discuss deleting it: KEEP it in roles. Never silently drop a role you weren't asked to delete.
+- The default role has no special protection — it can be deleted like any other when the project no longer needs a catch-all.
+
+The CLI's writer treats omission alone as a no-op (preserves the on-disk file with a warning). That preserves your work if you accidentally drop a role from roles — but it means a deletion you forgot to put in deleted_role_names will not actually delete. Always pair the two halves.
+
 SELF-CHECK BEFORE OUTPUT
 
 Before you emit the JSON, verify each of these against the baseline:
@@ -571,6 +581,7 @@ Before you emit the JSON, verify each of these against the baseline:
 - For each baseline id (convention id, principle id, role name, etc.): does the same id string appear in the output? If an id was silently renamed, restore the original id.
 - Did you add anything the human did not ask for? If yes, remove it.
 - Did you semantically soften or rewrite any preserved entry? If yes, restore the original text verbatim.
+- For each baseline role NOT present in the output's roles object: is its name listed in deleted_role_names? If not, the role is being silently dropped — restore it to roles. If the conversation truly asked to delete it, also add it to deleted_role_names.
 
 STRUCTURED EDIT SPECS
 
@@ -780,6 +791,7 @@ Example (for a single-agent fintech build — FIRST-TIME initialization of a ske
 12. Build commands belong in constitution, not governance.
 13. sensitive_patterns must contain ONLY regex patterns for content scanning (detecting secrets, credentials, real data in file content). Never put file paths or directory globs in sensitive_patterns — path-based enforcement belongs in role scoping and escalation triggers.
 14. If the project declares compliance frameworks or includes infrastructure-as-code, and the human agreed to third-party validation during discovery, add the scanner as a custom_checks entry in quality_gate.pre_commit (e.g. { "name": "infrastructure_compliance_scan", "command": "checkov -d infra/ --framework terraform", "description": "Third-party compliance scan — independent validation of infrastructure against regulatory baseline" }) and include the scanner's CI integration in required_artifacts if applicable.
+15. Role deletion is explicit, not implicit. NEVER omit a role from the roles object to signal deletion — delete-by-omission is intentionally retired because it caused silent data loss when extraction accidentally dropped a role the user didn't ask to delete. To delete a role on a return visit, list its name as a string in deleted_role_names. Roles already on disk that you neither include in roles nor list in deleted_role_names are preserved as a safety measure (the user sees a warning). The default role can be deleted like any other when the project doesn't need a catch-all — it has no special protection.
 
 OUTPUT FORMAT:
 
@@ -794,7 +806,8 @@ Respond with a single JSON object:
   },
   "ledger": { ... },
   "deployment_intent": "build_multi" | "build_single" | "govern",
-  "handoff_prompt": "string — the exact prompt the user should paste into their next agent session"
+  "handoff_prompt": "string — the exact prompt the user should paste into their next agent session",
+  "deleted_role_names": ["string"]   // OPTIONAL — only on return visits where the conversation explicitly removed roles. Each entry is a role name (matching the role.name field, not a filename). Omit this field entirely on first-time init or when no roles are being deleted.
 }
 
 The .gitignore side effect is handled separately via the [GITIGNORE_CONSENT] control marker during discovery (see SESSION LOG PRIVACY in the discovery prompt) — do not try to express it as a JSON field here. Extraction output is pure policy.

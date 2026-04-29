@@ -19,6 +19,15 @@ export interface PolicyFiles {
   governance: Record<string, unknown>;
   roles: Record<string, Record<string, unknown>>;
   ledger: Record<string, unknown>;
+  /**
+   * Explicit list of role names to delete from .agentpolicy/roles/
+   * during reconciliation. Retires the prior delete-by-omission
+   * semantics — a role file on disk that is in neither `roles` nor
+   * `deleted_role_names` is preserved (with a warning) rather than
+   * unlinked. The default role has no special protection and is
+   * deletable by listing its name here like any other.
+   */
+  deleted_role_names?: string[];
 }
 
 /**
@@ -143,16 +152,17 @@ export function writePolicy(
   writeJSON(governancePath, policy.governance);
   outcomes.push({ path: ".agentpolicy/governance.json", status: governanceStatus });
 
-  // Roles — write new/updated role files. Orphan-role-file
-  // reconciliation (deleting role files no longer in policy.roles)
-  // is sequenced AFTER all other writes — see the "Role
-  // reconciliation" block at the end of this function.
+  // Roles — write new/updated role files. Role-file reconciliation
+  // (executing explicit deletions from policy.deleted_role_names and
+  // preserving everything else as a safety measure) is sequenced
+  // AFTER all other writes — see the "Role reconciliation" block at
+  // the end of this function.
   //
   // What the sequencing guarantees: reconciliation deletes never
   // run unless every preceding write returned without throwing. A
   // write failure between here and the reconciliation block aborts
-  // before any delete, so orphan role files stay on disk for the
-  // next aegis init to handle.
+  // before any delete, so role files on disk stay where they are
+  // for the next aegis init to handle.
   //
   // What it does NOT guarantee: whole-policy transactional
   // atomicity. writeFileAtomic uses tmp + rename so individual file
@@ -161,10 +171,10 @@ export function writePolicy(
   // landed) + old governance.json (write threw) + old roles + old
   // ledger. The sequencing eliminates only the specific worst case
   // where reconciliation ran before a later write threw, leaving
-  // old role files unlinked AND new policy content not fully on
-  // disk. Recovery from a partial-write failure is "re-run aegis
-  // init"; the surviving prior content + landed new content
-  // converges through the next successful run.
+  // role files unlinked AND new policy content not fully on disk.
+  // Recovery from a partial-write failure is "re-run aegis init";
+  // the surviving prior content + landed new content converges
+  // through the next successful run.
   const existingRoleFiles = fs.existsSync(rolesDir)
     ? fs.readdirSync(rolesDir).filter((f) => f.endsWith(".json"))
     : [];
@@ -224,21 +234,35 @@ export function writePolicy(
   // === Role reconciliation (sequenced last) ===
   //
   // Reaching this point means every preceding write returned without
-  // throwing. Only now is it safe to delete role files that are no
-  // longer in policy.roles, because we know the new policy has
-  // landed in full. If any earlier write had thrown, the function
-  // would have unwound before getting here and orphan role files
-  // would remain on disk for the next aegis init to reconcile.
+  // throwing. Reconciliation walks every role file on disk and sorts
+  // each into one of three categories:
   //
-  // Reconciliation compares by canonical path (fs.realpathSync)
-  // rather than raw filename so case-insensitive filesystems (APFS,
-  // NTFS) don't delete the role we just wrote. Example:
-  // Default.json exists on disk, LLM emits role "default". Our
-  // write lands on the same inode (macOS keeps the stored case
-  // "Default.json") — the deletion pass must recognize the two
-  // names as the same file, not two different ones. Canonical-path
-  // comparison handles that correctly on every platform and also
-  // collapses symlinks cleanly.
+  //   A. Just-written role (canonical-path matches a write we made
+  //      this run) — never delete. Same file under a different name
+  //      on case-insensitive filesystems counts here too.
+  //
+  //   B. Explicit deletion (filename matches a sanitized name from
+  //      policy.deleted_role_names) — unlink. This is the ONLY path
+  //      that produces a deletion. Delete-by-omission is
+  //      intentionally retired: an extraction that silently drops a
+  //      role from policy.roles cannot cause data loss because the
+  //      omitted role does NOT match any explicit deletion entry
+  //      and falls through to category C.
+  //
+  //   C. Neither just-written nor explicitly deleted — preserve the
+  //      file and emit a "skipped" WriteOutcome plus a stderr
+  //      warning. The user sees both signals and can address the
+  //      orphan via a follow-up aegis init that lists it in
+  //      deleted_role_names. Silent extraction drift is no longer a
+  //      data-loss vector.
+  //
+  // Reconciliation compares by canonical path (fs.realpathSync) for
+  // category A so case-insensitive filesystems (APFS, NTFS) don't
+  // delete the role we just wrote. Example: Default.json exists on
+  // disk, LLM emits role "default". Our write lands on the same
+  // inode (macOS keeps the stored case "Default.json") — category A
+  // recognizes the two names as the same file via canonical path,
+  // not raw filename.
   //
   // Only reconcile if we successfully canonicalized every write. A
   // partial realpath view could misidentify a just-written file as
@@ -248,6 +272,25 @@ export function writePolicy(
   // complete.
   const canReconcile = writtenCanonical.size === newRoleFilenames.size;
   if (canReconcile) {
+    // Build the explicit-deletion set from policy.deleted_role_names.
+    // Each name passes through sanitizedRoleFilename so a malformed
+    // emission (e.g. "../etc/passwd") cannot escape rolesDir; bad
+    // names are surfaced to stderr and skipped, while valid names
+    // proceed to the delete pass below. Empty/absent
+    // deleted_role_names is normal — most return visits don't delete
+    // roles.
+    const deletedRoleFilenames = new Set<string>();
+    for (const roleName of policy.deleted_role_names ?? []) {
+      try {
+        deletedRoleFilenames.add(sanitizedRoleFilename(roleName));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        process.stderr.write(
+          `[aegis] ignored deleted_role_names entry "${roleName}" — ${msg}\n`
+        );
+      }
+    }
+
     for (const existing of existingRoleFiles) {
       const existingPath = path.join(rolesDir, existing);
       let resolved: string | null = null;
@@ -271,30 +314,54 @@ export function writePolicy(
         continue;
       }
 
+      // Category A — just-written role: never delete. Canonical-path
+      // match handles case-insensitive aliasing on APFS/NTFS.
       if (resolved && writtenCanonical.has(resolved)) continue;
 
-      try {
-        fs.unlinkSync(existingPath);
-        outcomes.push({
-          path: `.agentpolicy/roles/${existing}`,
-          status: "deleted",
-        });
-      } catch (err: unknown) {
-        const fsErr = err as NodeJS.ErrnoException;
-        if (fsErr?.code === "ENOENT") {
+      // Category B — explicit deletion: the user asked for this role
+      // to go (named in policy.deleted_role_names). Unlink it.
+      if (deletedRoleFilenames.has(existing)) {
+        try {
+          fs.unlinkSync(existingPath);
+          outcomes.push({
+            path: `.agentpolicy/roles/${existing}`,
+            status: "deleted",
+          });
+        } catch (err: unknown) {
+          const fsErr = err as NodeJS.ErrnoException;
+          if (fsErr?.code === "ENOENT") {
+            outcomes.push({
+              path: `.agentpolicy/roles/${existing}`,
+              status: "skipped",
+              reason: "entry vanished before deletion",
+            });
+            continue;
+          }
           outcomes.push({
             path: `.agentpolicy/roles/${existing}`,
             status: "skipped",
-            reason: "entry vanished before deletion",
+            reason: `could not remove: ${fsErr?.message ?? "unknown"}`,
           });
-          continue;
         }
-        outcomes.push({
-          path: `.agentpolicy/roles/${existing}`,
-          status: "skipped",
-          reason: `could not remove: ${fsErr?.message ?? "unknown"}`,
-        });
+        continue;
       }
+
+      // Category C — neither in policy.roles nor in
+      // deleted_role_names. Preserve as a safety measure: silent
+      // extraction drift cannot cause role-file data loss this way,
+      // because the only path to deletion is an explicit name in
+      // deleted_role_names. The user sees the preserved file in the
+      // outcomes summary and a stderr warning so they can address
+      // intentionally-orphaned roles via a follow-up aegis init that
+      // names them in deleted_role_names.
+      outcomes.push({
+        path: `.agentpolicy/roles/${existing}`,
+        status: "skipped",
+        reason: "omitted from policy.roles without explicit deletion — preserved as safety. To delete this role, run aegis init and list it in deleted_role_names.",
+      });
+      process.stderr.write(
+        `[aegis] preserved orphan role file ".agentpolicy/roles/${existing}" — extraction omitted it from policy.roles without listing it in deleted_role_names\n`
+      );
     }
   } else {
     // Reconciliation aborted because at least one write could not be

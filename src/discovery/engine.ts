@@ -74,6 +74,18 @@ export interface DiscoveryResult {
     deployment_intent: "build_multi" | "build_single" | "govern";
     /** Custom handoff prompt crafted by the extraction LLM from the full conversation context */
     handoff_prompt: string;
+    /**
+     * Explicit list of role names the user asked to delete during a
+     * return-visit conversation. Retires the prior delete-by-
+     * omission semantics: the writer no longer infers deletion from
+     * a role missing from `roles`. To delete a role, the extraction
+     * LLM lists its name here. Roles that appear in neither `roles`
+     * nor `deleted_role_names` are preserved on disk as a safety
+     * measure (silent extraction drift can no longer cause data
+     * loss). Optional and typically absent — only populated on
+     * return visits where deletions were discussed.
+     */
+    deleted_role_names?: string[];
   } | null;
   /**
    * How the discovery conversation concluded.
