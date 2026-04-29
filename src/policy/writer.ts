@@ -146,18 +146,25 @@ export function writePolicy(
   // Roles — write new/updated role files. Orphan-role-file
   // reconciliation (deleting role files no longer in policy.roles)
   // is sequenced AFTER all other writes — see the "Role
-  // reconciliation" block at the end of this function. That ordering
-  // guarantees we never unlink an old role file when the new full
-  // policy didn't successfully reach disk: if any write between here
-  // and the end of writePolicy throws, control unwinds before
-  // reconciliation runs and orphan files stay where they are. The
-  // user can then re-run aegis init knowing the prior policy is
-  // still intact.
+  // reconciliation" block at the end of this function.
   //
-  // Per-file atomicity is provided by writeFileAtomic (tmp + rename)
-  // and is unchanged by the sequencing. What sequencing buys is
-  // whole-policy consistency for the delete pass — deletes only
-  // execute against a state where the full new policy reached disk.
+  // What the sequencing guarantees: reconciliation deletes never
+  // run unless every preceding write returned without throwing. A
+  // write failure between here and the reconciliation block aborts
+  // before any delete, so orphan role files stay on disk for the
+  // next aegis init to handle.
+  //
+  // What it does NOT guarantee: whole-policy transactional
+  // atomicity. writeFileAtomic uses tmp + rename so individual file
+  // writes are atomic, but a mid-sequence throw still leaves a
+  // mixed state on disk — e.g. new constitution.json (already
+  // landed) + old governance.json (write threw) + old roles + old
+  // ledger. The sequencing eliminates only the specific worst case
+  // where reconciliation ran before a later write threw, leaving
+  // old role files unlinked AND new policy content not fully on
+  // disk. Recovery from a partial-write failure is "re-run aegis
+  // init"; the surviving prior content + landed new content
+  // converges through the next successful run.
   const existingRoleFiles = fs.existsSync(rolesDir)
     ? fs.readdirSync(rolesDir).filter((f) => f.endsWith(".json"))
     : [];
