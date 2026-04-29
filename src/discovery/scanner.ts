@@ -969,36 +969,61 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const existingPolicyContents: FileContent[] = [];
 
   if (hasExistingPolicy) {
+    // Policy contract surface is exactly four shapes — the spec floor
+    // every conforming .agentpolicy/ defines: constitution, governance,
+    // the role files, and the ledger. Everything else under the
+    // directory (session transcripts, overrides.jsonl, future state
+    // files, tooling caches) is implementation surface, not contract,
+    // and does not belong in the extraction baseline. The previous
+    // recursive glob misclassified session transcripts as policy and
+    // would silently treat any future state-dir artifact the same
+    // way; an explicit allowlist names the contract directly and
+    // self-documents intent.
+    const FIXED_POLICY_FILES = [
+      "constitution.json",
+      "governance.json",
+      "state/ledger.json",
+    ];
     try {
-      // Exclude sessions/** — those are conversation transcripts, not
-      // policy contract surface. They are loaded separately into
-      // existingSessionTranscripts below with their own path and
-      // higher size cap. Pulling them in here mislabels audit history
-      // as live policy and feeds it into buildExistingPolicyBaseline().
-      existingPolicyFiles = glob.sync("**/*.json", {
-        cwd: policyDir,
-        ignore: ["sessions/**"],
-      });
-      // Read every policy file — Aegis needs to know what's already
-      // established. Use MAX_FILE_SIZE_ABSOLUTE (1MB) rather than the
-      // 10KB scan default: the extraction prompt declares this content
-      // the "literal starting point" the LLM must preserve verbatim,
-      // so any silent mid-document truncation here corrupts the
-      // baseline. The 10KB default is correct for general scan files
-      // (many files, tight context budget); it is wrong for the small
-      // fixed set of policy files that have to come through whole.
-      for (const policyFile of existingPolicyFiles) {
-        const fullPath = path.join(policyDir, policyFile);
-        const content = await readFileSafe(fullPath, {
-          maxSize: MAX_FILE_SIZE_ABSOLUTE,
-        });
-        if (content && typeof content !== "symbol") {
-          content.path = `.agentpolicy/${policyFile}`;
-          existingPolicyContents.push(content);
-        }
-      }
+      const fixedPresent = FIXED_POLICY_FILES.filter((rel) =>
+        fs.existsSync(path.join(policyDir, rel))
+      );
+      const roleFiles = glob.sync("roles/*.json", { cwd: policyDir });
+      existingPolicyFiles = [
+        ...fixedPresent.filter((f) => f !== "state/ledger.json"),
+        ...roleFiles,
+        ...fixedPresent.filter((f) => f === "state/ledger.json"),
+      ];
     } catch {
-      // Can't read
+      // Can't enumerate directory — leave existingPolicyFiles empty
+      // and let the downstream "no readable policy" path in
+      // system-prompt.ts handle the briefing.
+    }
+
+    // Use MAX_FILE_SIZE_ABSOLUTE (1MB) rather than the 10KB scan
+    // default — the extraction prompt declares this content the
+    // "literal starting point" the LLM must preserve verbatim, so
+    // any silent mid-document truncation here corrupts the baseline.
+    // A null return from readFileSafe means the file exceeded 1MB,
+    // is not a regular file, has restrictive permissions, or vanished
+    // between the directory listing and the read; any of those would
+    // silently drop named policy content from the baseline. Throw
+    // with a specific path so the user can investigate rather than
+    // have init limp along on a known-bad input.
+    for (const policyFile of existingPolicyFiles) {
+      const fullPath = path.join(policyDir, policyFile);
+      const content = await readFileSafe(fullPath, {
+        maxSize: MAX_FILE_SIZE_ABSOLUTE,
+      });
+      if (content === null) {
+        throw new Error(
+          `Policy file ".agentpolicy/${policyFile}" could not be loaded — it may exceed the 1MB ceiling, have restrictive permissions, or have vanished between the scan listing and the read. Investigate before re-running aegis init; a corrupted or oversize policy file would otherwise leave a silent gap in the extraction baseline.`
+        );
+      }
+      if (typeof content !== "symbol") {
+        content.path = `.agentpolicy/${policyFile}`;
+        existingPolicyContents.push(content);
+      }
     }
   }
 
