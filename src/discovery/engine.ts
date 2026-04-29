@@ -576,6 +576,28 @@ export class DiscoveryEngine {
   private async extractPolicy(): Promise<DiscoveryResult["policy"]> {
     const MAX_ATTEMPTS = 2;
 
+    // Match user-role messages that carry a synthetic [system: file
+    // read] payload for a path under .agentpolicy/. Aegis emits
+    // [READ_FILE: .agentpolicy/...] markers mid-discovery; the engine
+    // intercepts each one and pushes the file's contents back as a
+    // user-role message via readFileForAegis (see the framing in
+    // engine.ts:431). For paths INSIDE .agentpolicy/, those bodies
+    // are duplicated by the EXISTING POLICY BASELINE section of the
+    // extraction prompt — concatenating both into the extraction
+    // input wastes prompt budget and gives the LLM two sources of
+    // truth for the same content. File reads OUTSIDE .agentpolicy/
+    // (charter docs, external research, anything the user pointed
+    // Aegis at for context) are NOT elided; those carry genuine
+    // context that belongs in extraction input.
+    const POLICY_READ_RE =
+      /^\[system: file read\] Contents of \.agentpolicy\/[^:]+:/;
+
+    // Carry forward a description of the previous attempt's failure
+    // so the retry can address the specific defect rather than
+    // replaying the same monolithic call blind. Set at each failure
+    // branch (parse / structural / schema) before `continue`.
+    let lastFailure: string | undefined;
+
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // Start or restart the extraction animation
       this.ui.startThinking("extraction");
@@ -585,15 +607,31 @@ export class DiscoveryEngine {
       const extractionPrompt = buildExtractionSystemPrompt(existingBaseline);
 
       const transcriptSummary = this.messages
-        .map((m) => `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`)
+        .map((m) => {
+          if (m.role === "user" && POLICY_READ_RE.test(m.content)) {
+            const header = m.content.split("\n", 1)[0];
+            return `Human: ${header}\n\n[body elided — see EXISTING POLICY BASELINE]`;
+          }
+          return `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`;
+        })
         .join("\n\n");
 
-      const extractionMessages: Message[] = [
-        {
+      const extractionMessages: Message[] = [];
+      // On retry, prepend a remediation hint naming the specific
+      // failure so the LLM addresses it rather than reproducing the
+      // same defect. Without this, retry 2 is identical to retry 1
+      // with no signal — the second attempt has no idea why the first
+      // failed and burns the budget on the same bug.
+      if (lastFailure) {
+        extractionMessages.push({
           role: "user",
-          content: `Here is the complete discovery conversation transcript. Compile it into the .agentpolicy/ JSON files.\n\n${transcriptSummary}`,
-        },
-      ];
+          content: `[system] The previous extraction attempt failed: ${lastFailure}. Re-emit the JSON with this corrected. All other rules from the system prompt still apply — preserve baseline content verbatim, apply only the conversation-named edits, output a single valid JSON object.`,
+        });
+      }
+      extractionMessages.push({
+        role: "user",
+        content: `Here is the complete discovery conversation transcript. Compile it into the .agentpolicy/ JSON files.\n\n${transcriptSummary}`,
+      });
 
       try {
         const policy = await this.provider.chatJSON<NonNullable<DiscoveryResult["policy"]>>(
@@ -608,6 +646,8 @@ export class DiscoveryEngine {
           if (attempt < MAX_ATTEMPTS) {
             this.ui.stopThinking();
             this.ui.showNote("Extraction came back incomplete — retrying...");
+            lastFailure =
+              "the JSON was missing one or more of the required top-level keys (constitution, governance, roles, ledger). Emit ALL four keys this time.";
             continue;
           }
           this.ui.showError(
@@ -628,14 +668,15 @@ export class DiscoveryEngine {
         });
         const validationFailures = validationResults.filter((r) => !r.valid);
         if (validationFailures.length > 0) {
-          if (attempt < MAX_ATTEMPTS) {
-            this.ui.showNote("Extraction produced invalid policy — retrying...");
-            continue;
-          }
           const summary = validationFailures
             .slice(0, 3)
             .map((f) => `${f.file}: ${f.errors[0] ?? "invalid"}`)
             .join("; ");
+          if (attempt < MAX_ATTEMPTS) {
+            this.ui.showNote("Extraction produced invalid policy — retrying...");
+            lastFailure = `the emitted JSON failed schema validation (${summary}). Fix these specific fields and re-emit.`;
+            continue;
+          }
           this.ui.showError(
             `Extracted policy failed schema validation (${summary}). Run aegis init again.`
           );
@@ -670,6 +711,11 @@ export class DiscoveryEngine {
 
         if (attempt < MAX_ATTEMPTS) {
           this.ui.showNote("Extraction hit a snag — retrying...");
+          const detail =
+            error instanceof Error
+              ? error.message.slice(0, 200)
+              : "unknown error";
+          lastFailure = `the response could not be parsed as JSON (${detail}). Emit a single valid JSON object with no preamble, no markdown fences, and no trailing prose.`;
           continue;
         }
 
