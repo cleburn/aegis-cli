@@ -577,20 +577,27 @@ export class DiscoveryEngine {
     const MAX_ATTEMPTS = 2;
 
     // Match user-role messages that carry a synthetic [system: file
-    // read] payload for a path under .agentpolicy/. Aegis emits
-    // [READ_FILE: .agentpolicy/...] markers mid-discovery; the engine
-    // intercepts each one and pushes the file's contents back as a
-    // user-role message via readFileForAegis (see the framing in
-    // engine.ts:431). For paths INSIDE .agentpolicy/, those bodies
-    // are duplicated by the EXISTING POLICY BASELINE section of the
-    // extraction prompt — concatenating both into the extraction
-    // input wastes prompt budget and gives the LLM two sources of
-    // truth for the same content. File reads OUTSIDE .agentpolicy/
-    // (charter docs, external research, anything the user pointed
-    // Aegis at for context) are NOT elided; those carry genuine
-    // context that belongs in extraction input.
+    // read] payload for a file ALSO present in the EXISTING POLICY
+    // BASELINE. Aegis emits [READ_FILE: .agentpolicy/...] markers
+    // mid-discovery; the engine intercepts each one and pushes the
+    // file's contents back as a user-role message via
+    // readFileForAegis (see the framing in engine.ts:431). For files
+    // in the baseline allowlist (constitution, governance,
+    // state/ledger, roles/<name>), those bodies are duplicated by
+    // the EXISTING POLICY BASELINE section of the extraction prompt
+    // — concatenating both into the extraction input wastes prompt
+    // budget and gives the LLM two sources of truth for the same
+    // content. The regex MUST mirror the scanner's FIXED_POLICY_FILES
+    // + roles glob exactly (scanner.ts:982-994): broader matching
+    // would silently drop context the user explicitly asked Aegis
+    // to read (e.g. a session transcript, overrides.jsonl, future
+    // state files); narrower matching would leak duplicated content
+    // back into extraction. File reads OUTSIDE the baseline (charter
+    // docs, external research, anything the user pointed Aegis at
+    // for context) are NOT elided — those carry genuine context
+    // that belongs in extraction input.
     const POLICY_READ_RE =
-      /^\[system: file read\] Contents of \.agentpolicy\/[^:]+:/;
+      /^\[system: file read\] Contents of \.agentpolicy\/(constitution|governance|state\/ledger|roles\/[^/:]+)\.json:/;
 
     // Carry forward a description of the previous attempt's failure
     // so the retry can address the specific defect rather than
@@ -609,6 +616,12 @@ export class DiscoveryEngine {
       const transcriptSummary = this.messages
         .map((m) => {
           if (m.role === "user" && POLICY_READ_RE.test(m.content)) {
+            // The "Human:" prefix here matches the user-role branch
+            // below — synthetic file-read payloads are injected as
+            // user-role messages by readFileForAegis. If that
+            // framing ever shifts (different role for system-injected
+            // messages, separate provider channel, etc.), this
+            // prefix needs to shift with it.
             const header = m.content.split("\n", 1)[0];
             return `Human: ${header}\n\n[body elided — see EXISTING POLICY BASELINE]`;
           }
@@ -715,7 +728,20 @@ export class DiscoveryEngine {
             error instanceof Error
               ? error.message.slice(0, 200)
               : "unknown error";
-          lastFailure = `the response could not be parsed as JSON (${detail}). Emit a single valid JSON object with no preamble, no markdown fences, and no trailing prose.`;
+          // SyntaxError comes from JSON.parse via parseJSONResponse
+          // (anthropic.ts:127) — the model emitted invalid JSON.
+          // Anything else from chatJSON is a transport-layer error
+          // (network, auth, rate limit, timeout) which is not the
+          // model's fault; the retry hint should not accuse it of
+          // bad output. The chatJSON system prompt already covers
+          // the "valid JSON only" rule (anthropic.ts:75), so the
+          // hint just names the parse defect concretely instead of
+          // re-teaching the rule.
+          if (error instanceof SyntaxError) {
+            lastFailure = `the previous attempt returned text that could not be parsed as JSON (${detail}).`;
+          } else {
+            lastFailure = `the previous attempt failed before producing usable output (${detail}). Try again.`;
+          }
           continue;
         }
 
