@@ -33,6 +33,34 @@ import type { TerminalUI } from "../ui/terminal.js";
 /** Maximum chained [READ_FILE: …] requests per single user turn. */
 const MAX_READ_DEPTH = 5;
 
+/**
+ * Forensic record of how extraction failed, captured into the saved
+ * session transcript so a subsequent debugging pass (Aegis on a
+ * future return visit, or a human reading the audit trail) can see
+ * the specific failure mode without re-running the failed call.
+ *
+ * Categories mirror the failure branches in extractPolicy():
+ * - "parse": JSON.parse threw a SyntaxError on the model's output.
+ * - "transport": chatJSON threw a non-SyntaxError (network, auth,
+ *   rate limit, timeout, anything provider-side). The model's output
+ *   never reached the parser.
+ * - "structural": the parsed object was missing one or more of the
+ *   required top-level keys (constitution, governance, roles,
+ *   ledger).
+ * - "schema": the parsed object passed structural completeness but
+ *   failed ajv validation against one or more of the policy schemas.
+ *
+ * `detail` carries category-specific forensic information — the
+ * parse error message, the missing-keys list, or the schema
+ * validation summary. Bounded to a manageable size at population
+ * time so the transcript record stays compact even when the model
+ * emits a runaway error.
+ */
+export interface ExtractionFailure {
+  category: "parse" | "transport" | "structural" | "schema";
+  detail: string;
+}
+
 export interface DiscoveryResult {
   /** The full conversation transcript */
   transcript: Message[];
@@ -57,6 +85,13 @@ export interface DiscoveryResult {
    *   when it wasn't.
    */
   status: "completed" | "no_changes" | "extraction_failed";
+  /**
+   * Populated only when status is "extraction_failed". Carries the
+   * specific failure mode and detail that ended the session, so the
+   * init command can preserve them in the saved transcript for
+   * forensic review.
+   */
+  extractionFailure?: ExtractionFailure;
 }
 
 export class DiscoveryEngine {
@@ -260,12 +295,13 @@ export class DiscoveryEngine {
         // Policy changes needed — extract and compile
         this.ui.showNote("Drafting your policy files...");
 
-        const policy = await this.extractPolicy();
+        const { policy, failure } = await this.extractPolicy();
 
         return {
           transcript: [...this.messages],
           policy,
           status: policy ? "completed" : "extraction_failed",
+          extractionFailure: failure,
         };
       }
 
@@ -582,7 +618,10 @@ export class DiscoveryEngine {
    * Retries once on failure — large JSON outputs occasionally hit
    * token limits or produce syntax errors on the first attempt.
    */
-  private async extractPolicy(): Promise<DiscoveryResult["policy"]> {
+  private async extractPolicy(): Promise<{
+    policy: DiscoveryResult["policy"];
+    failure?: ExtractionFailure;
+  }> {
     const MAX_ATTEMPTS = 2;
 
     // Match user-role messages that carry a synthetic [system: file
@@ -665,6 +704,19 @@ export class DiscoveryEngine {
 
         // Validate the extraction produced the expected shape
         if (!policy || !policy.constitution || !policy.governance || !policy.roles || !policy.ledger) {
+          // Enumerate which top-level keys were missing so the
+          // forensic record names them specifically. Useful for
+          // diagnosing whether the LLM consistently drops the same
+          // key (e.g. "ledger") versus producing scattered failures.
+          const missingKeys: string[] = [];
+          if (!policy?.constitution) missingKeys.push("constitution");
+          if (!policy?.governance) missingKeys.push("governance");
+          if (!policy?.roles) missingKeys.push("roles");
+          if (!policy?.ledger) missingKeys.push("ledger");
+          const missingDetail =
+            missingKeys.length > 0
+              ? `missing keys: ${missingKeys.join(", ")}`
+              : "extraction returned null or non-object";
           if (attempt < MAX_ATTEMPTS) {
             this.ui.stopThinking();
             this.ui.showNote("Extraction came back incomplete — retrying...");
@@ -675,7 +727,10 @@ export class DiscoveryEngine {
           this.ui.showError(
             "Extraction produced an incomplete result. Run aegis init again — sometimes the model needs a second pass."
           );
-          return null;
+          return {
+            policy: null,
+            failure: { category: "structural", detail: missingDetail },
+          };
         }
 
         // Schema-validate the extracted policy before returning. A
@@ -694,6 +749,14 @@ export class DiscoveryEngine {
             .slice(0, 3)
             .map((f) => `${f.file}: ${f.errors[0] ?? "invalid"}`)
             .join("; ");
+          // Forensic detail captures every failing file, not just the
+          // first 3 the LLM-facing summary names. The retry-hint and
+          // user-visible error stay terse; the transcript record
+          // carries the full picture so a later debugger sees every
+          // schema violation that contributed to the abort.
+          const fullDetail = validationFailures
+            .map((f) => `${f.file}: ${f.errors[0] ?? "invalid"}`)
+            .join("; ");
           if (attempt < MAX_ATTEMPTS) {
             this.ui.showNote("Extraction produced invalid policy — retrying...");
             lastFailure = `the emitted JSON failed schema validation (${summary}). Fix these specific fields and re-emit.`;
@@ -702,7 +765,10 @@ export class DiscoveryEngine {
           this.ui.showError(
             `Extracted policy failed schema validation (${summary}). Run aegis init again.`
           );
-          return null;
+          return {
+            policy: null,
+            failure: { category: "schema", detail: fullDetail },
+          };
         }
 
         // Default deployment_intent if extraction didn't produce one.
@@ -727,26 +793,28 @@ export class DiscoveryEngine {
           policy.handoff_prompt = "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.";
         }
 
-        return policy;
+        return { policy };
       } catch (error) {
         this.ui.stopThinking();
 
+        const detail =
+          error instanceof Error
+            ? error.message.slice(0, 200)
+            : "unknown error";
+        // SyntaxError comes from JSON.parse via parseJSONResponse
+        // (anthropic.ts:127) — the model emitted invalid JSON.
+        // Anything else from chatJSON is a transport-layer error
+        // (network, auth, rate limit, timeout) which is not the
+        // model's fault; the retry hint and forensic record should
+        // not accuse it of bad output. The chatJSON system prompt
+        // already covers the "valid JSON only" rule
+        // (anthropic.ts:75), so the hint just names the parse
+        // defect concretely instead of re-teaching the rule.
+        const isParseFailure = error instanceof SyntaxError;
+
         if (attempt < MAX_ATTEMPTS) {
           this.ui.showNote("Extraction hit a snag — retrying...");
-          const detail =
-            error instanceof Error
-              ? error.message.slice(0, 200)
-              : "unknown error";
-          // SyntaxError comes from JSON.parse via parseJSONResponse
-          // (anthropic.ts:127) — the model emitted invalid JSON.
-          // Anything else from chatJSON is a transport-layer error
-          // (network, auth, rate limit, timeout) which is not the
-          // model's fault; the retry hint should not accuse it of
-          // bad output. The chatJSON system prompt already covers
-          // the "valid JSON only" rule (anthropic.ts:75), so the
-          // hint just names the parse defect concretely instead of
-          // re-teaching the rule.
-          if (error instanceof SyntaxError) {
+          if (isParseFailure) {
             lastFailure = `the previous attempt returned text that could not be parsed as JSON (${detail}).`;
           } else {
             lastFailure = `the previous attempt failed before producing usable output (${detail}). Try again.`;
@@ -757,11 +825,22 @@ export class DiscoveryEngine {
         this.ui.showError(
           `Policy extraction failed: ${error instanceof Error ? error.message : "Unknown error"}. Run aegis init again.`
         );
-        return null;
+        return {
+          policy: null,
+          failure: {
+            category: isParseFailure ? "parse" : "transport",
+            detail,
+          },
+        };
       }
     }
 
-    return null;
+    // Defensive fall-through — every code path inside the for loop
+    // either returns or continues, so reaching here would mean
+    // MAX_ATTEMPTS was exhausted via continue without a final
+    // return. Keep the type sound rather than relying on an
+    // unreachable.
+    return { policy: null };
   }
 
   /**

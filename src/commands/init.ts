@@ -176,6 +176,23 @@ export async function initCommand(): Promise<void> {
           future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
         }, null, 2),
       });
+    } else if (result.extractionFailure) {
+      // Failed-extraction sessions get a parallel closing entry so
+      // the saved transcript carries the specific failure category
+      // and detail. Without this, the next forensic pass would have
+      // to reproduce the failure to learn what went wrong — and the
+      // failure is by definition non-deterministic in some cases
+      // (transport errors, model output drift). Capturing it here
+      // makes "what failed" answerable from the transcript alone.
+      // Mutually exclusive with the result.policy branch above:
+      // extractionFailure is only populated when policy is null.
+      transcriptEntries.push({
+        role: "system",
+        content: JSON.stringify({
+          type: "session_closing",
+          extraction_failure: result.extractionFailure,
+        }, null, 2),
+      });
     }
 
     const transcriptPath = writeTranscript(cwd, transcriptEntries);
