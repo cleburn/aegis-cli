@@ -988,7 +988,13 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       const fixedPresent = FIXED_POLICY_FILES.filter((rel) =>
         fs.existsSync(path.join(policyDir, rel))
       );
-      const roleFiles = glob.sync("roles/*.json", { cwd: policyDir });
+      // Sort role files alphabetically so the prompt ordering is
+      // deterministic across filesystems and across runs. glob's
+      // internal order is implementation-dependent (readdir order on
+      // most systems, which varies by filesystem and inode layout);
+      // sorting here gives a stable briefing for prompt-cache hits
+      // and human-readable diffs across sessions.
+      const roleFiles = glob.sync("roles/*.json", { cwd: policyDir }).sort();
       existingPolicyFiles = [
         ...fixedPresent.filter((f) => f !== "state/ledger.json"),
         ...roleFiles,
@@ -1017,7 +1023,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       });
       if (content === null) {
         throw new Error(
-          `Policy file ".agentpolicy/${policyFile}" could not be loaded — it may exceed the 1MB ceiling, have restrictive permissions, or have vanished between the scan listing and the read. Investigate before re-running aegis init; a corrupted or oversize policy file would otherwise leave a silent gap in the extraction baseline.`
+          `Policy file ".agentpolicy/${policyFile}" could not be loaded — it may exceed the 1MB ceiling, have restrictive permissions, not be a regular file (e.g. directory or dangling symlink), or have vanished between the scan listing and the read. Investigate before re-running aegis init; a corrupted, oversize, or misshaped policy file would otherwise leave a silent gap in the extraction baseline.`
         );
       }
       if (typeof content !== "symbol") {
