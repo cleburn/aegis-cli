@@ -492,8 +492,17 @@ export class DiscoveryEngine {
     const truncatedNote = result.truncated
       ? " [Content was truncated at 1MB — file exceeded the read ceiling.]"
       : "";
+    // Normalize the display path to forward slashes for cross-
+    // platform regex matching downstream. path.relative returns
+    // OS-native separators (backslashes on Windows), which would
+    // silently defeat any consumer that builds a regex assuming
+    // POSIX paths — e.g. POLICY_READ_RE in extractPolicy. Path
+    // operations elsewhere (isSensitiveFile, path.resolve, etc.)
+    // continue to use the OS-native resolvedRelative; only the
+    // emitted display string is canonicalized.
+    const displayPath = resolvedRelative.split(path.sep).join("/");
     return framed(
-      `Contents of ${resolvedRelative}:${truncatedNote}`,
+      `Contents of ${displayPath}:${truncatedNote}`,
       result.content
     );
   }
