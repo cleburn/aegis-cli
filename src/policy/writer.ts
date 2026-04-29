@@ -291,6 +291,43 @@ export function writePolicy(
       }
     }
 
+    // Surface contradictions: a role appearing in BOTH policy.roles
+    // and deleted_role_names is internally inconsistent. The writer
+    // resolves it as "keep" (the role-write happened, category A
+    // protects it from category B), but extraction drift this
+    // serious should be visible. Stderr warning, no behavior change.
+    for (const sanitized of deletedRoleFilenames) {
+      if (newRoleFilenames.has(sanitized)) {
+        process.stderr.write(
+          `[aegis] role "${sanitized.replace(/\.json$/, "")}" appears in both policy.roles and deleted_role_names — keeping the role (the write wins). This is likely extraction drift; consider re-running aegis init if you actually wanted it deleted.\n`
+        );
+      }
+    }
+
+    // Pre-canonicalize each explicit-deletion target so category B
+    // matching uses the same canonical-path semantics as category A.
+    // On case-insensitive filesystems (APFS, NTFS), this resolves
+    // "default.json" to the canonical path of an on-disk
+    // "Default.json" — letting the user delete a legacy mixed-case
+    // role file via the canonical lowercase name. ENOENT is
+    // expected when no file matches the requested name (the deletion
+    // entry was a no-op or referred to a name nothing claims) and
+    // is silently ignored. Any other error gets a stderr note but
+    // doesn't abort reconciliation.
+    const deletedCanonical = new Set<string>();
+    for (const sanitized of deletedRoleFilenames) {
+      const candidatePath = path.join(rolesDir, sanitized);
+      try {
+        deletedCanonical.add(fs.realpathSync.native(candidatePath));
+      } catch (err: unknown) {
+        const fsErr = err as NodeJS.ErrnoException;
+        if (fsErr?.code === "ENOENT") continue;
+        process.stderr.write(
+          `[aegis] could not canonicalize deletion target "${sanitized}" — ${fsErr?.message ?? "unknown"}\n`
+        );
+      }
+    }
+
     for (const existing of existingRoleFiles) {
       const existingPath = path.join(rolesDir, existing);
       let resolved: string | null = null;
@@ -319,8 +356,14 @@ export function writePolicy(
       if (resolved && writtenCanonical.has(resolved)) continue;
 
       // Category B — explicit deletion: the user asked for this role
-      // to go (named in policy.deleted_role_names). Unlink it.
-      if (deletedRoleFilenames.has(existing)) {
+      // to go. Match either by canonical path (handles case-
+      // insensitive aliasing — "default" deletes "Default.json" on
+      // APFS) or by exact filename (defensive fallback when
+      // canonicalization of the deletion target failed but the raw
+      // name still matches).
+      const matchedByCanonical = resolved !== null && deletedCanonical.has(resolved);
+      const matchedByName = deletedRoleFilenames.has(existing);
+      if (matchedByCanonical || matchedByName) {
         try {
           fs.unlinkSync(existingPath);
           outcomes.push({
@@ -346,21 +389,20 @@ export function writePolicy(
         continue;
       }
 
-      // Category C — neither in policy.roles nor in
-      // deleted_role_names. Preserve as a safety measure: silent
-      // extraction drift cannot cause role-file data loss this way,
-      // because the only path to deletion is an explicit name in
-      // deleted_role_names. The user sees the preserved file in the
-      // outcomes summary and a stderr warning so they can address
-      // intentionally-orphaned roles via a follow-up aegis init that
-      // names them in deleted_role_names.
+      // Category C — neither just-written nor explicitly deleted.
+      // Preserve as a safety measure: silent extraction drift cannot
+      // cause role-file data loss this way, because the only path
+      // to deletion is an explicit deletion request. The user sees
+      // the preserved file in the outcomes summary and a stderr
+      // warning so they can address intentionally-orphaned roles
+      // via a follow-up aegis init that names them.
       outcomes.push({
         path: `.agentpolicy/roles/${existing}`,
         status: "skipped",
-        reason: "omitted from policy.roles without explicit deletion — preserved as safety. To delete this role, run aegis init and list it in deleted_role_names.",
+        reason: "extraction omitted this role without asking to delete it — preserved as a safety measure. To remove it, run aegis init again and tell Aegis you want this role deleted.",
       });
       process.stderr.write(
-        `[aegis] preserved orphan role file ".agentpolicy/roles/${existing}" — extraction omitted it from policy.roles without listing it in deleted_role_names\n`
+        `[aegis] preserved orphan role file ".agentpolicy/roles/${existing}" — extraction omitted it without explicitly asking to delete it\n`
       );
     }
   } else {
