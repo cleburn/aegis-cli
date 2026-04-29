@@ -970,11 +970,28 @@ export async function scanRepo(root: string): Promise<ScanResult> {
 
   if (hasExistingPolicy) {
     try {
-      existingPolicyFiles = glob.sync("**/*.json", { cwd: policyDir });
-      // Read every policy file — Aegis needs to know what's already established
+      // Exclude sessions/** — those are conversation transcripts, not
+      // policy contract surface. They are loaded separately into
+      // existingSessionTranscripts below with their own path and
+      // higher size cap. Pulling them in here mislabels audit history
+      // as live policy and feeds it into buildExistingPolicyBaseline().
+      existingPolicyFiles = glob.sync("**/*.json", {
+        cwd: policyDir,
+        ignore: ["sessions/**"],
+      });
+      // Read every policy file — Aegis needs to know what's already
+      // established. Use MAX_FILE_SIZE_ABSOLUTE (1MB) rather than the
+      // 10KB scan default: the extraction prompt declares this content
+      // the "literal starting point" the LLM must preserve verbatim,
+      // so any silent mid-document truncation here corrupts the
+      // baseline. The 10KB default is correct for general scan files
+      // (many files, tight context budget); it is wrong for the small
+      // fixed set of policy files that have to come through whole.
       for (const policyFile of existingPolicyFiles) {
         const fullPath = path.join(policyDir, policyFile);
-        const content = await readFileSafe(fullPath);
+        const content = await readFileSafe(fullPath, {
+          maxSize: MAX_FILE_SIZE_ABSOLUTE,
+        });
         if (content && typeof content !== "symbol") {
           content.path = `.agentpolicy/${policyFile}`;
           existingPolicyContents.push(content);
