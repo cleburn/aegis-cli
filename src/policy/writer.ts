@@ -143,19 +143,21 @@ export function writePolicy(
   writeJSON(governancePath, policy.governance);
   outcomes.push({ path: ".agentpolicy/governance.json", status: governanceStatus });
 
-  // Roles — write new/updated, then reconcile by deleting any prior
-  // role file that is no longer in the extracted policy. On return
-  // visits where the user removed a role, this converges the on-disk
-  // state with the compiled policy instead of leaving orphan files.
+  // Roles — write new/updated role files. Orphan-role-file
+  // reconciliation (deleting role files no longer in policy.roles)
+  // is sequenced AFTER all other writes — see the "Role
+  // reconciliation" block at the end of this function. That ordering
+  // guarantees we never unlink an old role file when the new full
+  // policy didn't successfully reach disk: if any write between here
+  // and the end of writePolicy throws, control unwinds before
+  // reconciliation runs and orphan files stay where they are. The
+  // user can then re-run aegis init knowing the prior policy is
+  // still intact.
   //
-  // Reconciliation compares by canonical path (fs.realpathSync) rather
-  // than raw filename so case-insensitive filesystems (APFS, NTFS)
-  // don't delete the role we just wrote. Example: Default.json exists
-  // on disk, LLM emits role "default". Our write lands on the same
-  // inode (macOS keeps the stored case "Default.json") — the deletion
-  // pass must recognize the two names as the same file, not two
-  // different ones. Canonical-path comparison handles that correctly
-  // on every platform and also collapses symlinks cleanly.
+  // Per-file atomicity is provided by writeFileAtomic (tmp + rename)
+  // and is unchanged by the sequencing. What sequencing buys is
+  // whole-policy consistency for the delete pass — deletes only
+  // execute against a state where the full new policy reached disk.
   const existingRoleFiles = fs.existsSync(rolesDir)
     ? fs.readdirSync(rolesDir).filter((f) => f.endsWith(".json"))
     : [];
@@ -178,11 +180,65 @@ export function writePolicy(
     }
   }
 
+  // Ledger
+  const ledgerPath = path.join(stateDir, "ledger.json");
+  const ledgerStatus: WriteStatus = fs.existsSync(ledgerPath) ? "updated" : "created";
+  writeJSON(ledgerPath, policy.ledger);
+  outcomes.push({ path: ".agentpolicy/state/ledger.json", status: ledgerStatus });
+
+  // overrides.jsonl — append-only at runtime. Created empty on first
+  // visit, left untouched on subsequent runs so the runtime log is
+  // preserved across aegis init invocations.
+  const overridesPath = path.join(stateDir, "overrides.jsonl");
+  if (fs.existsSync(overridesPath)) {
+    outcomes.push({
+      path: ".agentpolicy/state/overrides.jsonl",
+      status: "unchanged",
+    });
+  } else {
+    writeFileAtomic(overridesPath, "");
+    outcomes.push({
+      path: ".agentpolicy/state/overrides.jsonl",
+      status: "created",
+    });
+  }
+
+  // .mcp.json — never overwrite. If the user already has one, leave
+  // it alone and report unchanged so the CLI doesn't pretend it wrote
+  // a fresh file.
+  const mcpConfigPath = path.join(projectRoot, ".mcp.json");
+  if (fs.existsSync(mcpConfigPath)) {
+    outcomes.push({ path: ".mcp.json", status: "unchanged" });
+  } else {
+    writeFileAtomic(mcpConfigPath, JSON.stringify(MCP_CONFIG, null, 2) + "\n");
+    outcomes.push({ path: ".mcp.json", status: "created" });
+  }
+
+  // === Role reconciliation (sequenced last) ===
+  //
+  // Reaching this point means every preceding write returned without
+  // throwing. Only now is it safe to delete role files that are no
+  // longer in policy.roles, because we know the new policy has
+  // landed in full. If any earlier write had thrown, the function
+  // would have unwound before getting here and orphan role files
+  // would remain on disk for the next aegis init to reconcile.
+  //
+  // Reconciliation compares by canonical path (fs.realpathSync)
+  // rather than raw filename so case-insensitive filesystems (APFS,
+  // NTFS) don't delete the role we just wrote. Example:
+  // Default.json exists on disk, LLM emits role "default". Our
+  // write lands on the same inode (macOS keeps the stored case
+  // "Default.json") — the deletion pass must recognize the two
+  // names as the same file, not two different ones. Canonical-path
+  // comparison handles that correctly on every platform and also
+  // collapses symlinks cleanly.
+  //
   // Only reconcile if we successfully canonicalized every write. A
   // partial realpath view could misidentify a just-written file as
   // stale and unlink it. Fail-safe: skip cleanup this run; the next
-  // aegis init will pick up the reconciliation. Every skipped decision
-  // still produces a WriteOutcome so the audit trail is complete.
+  // aegis init will pick up the reconciliation. Every skipped
+  // decision still produces a WriteOutcome so the audit trail is
+  // complete.
   const canReconcile = writtenCanonical.size === newRoleFilenames.size;
   if (canReconcile) {
     for (const existing of existingRoleFiles) {
@@ -256,40 +312,6 @@ export function writePolicy(
         candidates,
       });
     }
-  }
-
-  // Ledger
-  const ledgerPath = path.join(stateDir, "ledger.json");
-  const ledgerStatus: WriteStatus = fs.existsSync(ledgerPath) ? "updated" : "created";
-  writeJSON(ledgerPath, policy.ledger);
-  outcomes.push({ path: ".agentpolicy/state/ledger.json", status: ledgerStatus });
-
-  // overrides.jsonl — append-only at runtime. Created empty on first
-  // visit, left untouched on subsequent runs so the runtime log is
-  // preserved across aegis init invocations.
-  const overridesPath = path.join(stateDir, "overrides.jsonl");
-  if (fs.existsSync(overridesPath)) {
-    outcomes.push({
-      path: ".agentpolicy/state/overrides.jsonl",
-      status: "unchanged",
-    });
-  } else {
-    writeFileAtomic(overridesPath, "");
-    outcomes.push({
-      path: ".agentpolicy/state/overrides.jsonl",
-      status: "created",
-    });
-  }
-
-  // .mcp.json — never overwrite. If the user already has one, leave
-  // it alone and report unchanged so the CLI doesn't pretend it wrote
-  // a fresh file.
-  const mcpConfigPath = path.join(projectRoot, ".mcp.json");
-  if (fs.existsSync(mcpConfigPath)) {
-    outcomes.push({ path: ".mcp.json", status: "unchanged" });
-  } else {
-    writeFileAtomic(mcpConfigPath, JSON.stringify(MCP_CONFIG, null, 2) + "\n");
-    outcomes.push({ path: ".mcp.json", status: "created" });
   }
 
   return outcomes;
