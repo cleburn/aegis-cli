@@ -792,19 +792,34 @@ export class DiscoveryEngine {
         }
 
         // Default deployment_intent if extraction didn't produce one.
-        // "govern" only fits when the project both has existing policy
-        // AND actually contains source code. repoHasRealSource checks
-        // the config-driven stack detectors AND the raw file-extension
-        // tally, so a Makefile-style repo with just main.py at the
-        // root still registers as mature, while a project with only
-        // docs/ or examples/ (non-source top-level dirs) correctly
-        // falls through to a build handoff.
+        //
+        // Maturity check via repoHasRealSource — true iff the
+        // project either has a recognized stack signal OR contains
+        // source files in known languages (config-light source-only
+        // repos count). When real source exists, default to "govern"
+        // regardless of whether an .agentpolicy/ already exists:
+        // adding governance to an existing codebase is a govern
+        // operation whether or not the project has been governed
+        // before, and a build handoff would tell the next agent to
+        // build something that already exists.
+        //
+        // Skeletal repos (no real source) split on role count, not
+        // on whether "default" is among them:
+        //   - 1 role  → build_single (single agent, including a
+        //     single specialist whose name isn't "default")
+        //   - 2+ roles → build_multi
+        // The previous filter `r => r !== "default"` mis-classified
+        // a single specialist-named role as build_multi because
+        // filtering out only "default" left length === 1. Counting
+        // roles directly gives the right answer in every case
+        // (validator already enforces ≥1 role).
         if (!policy.deployment_intent) {
-          if (this.scan.hasExistingPolicy && repoHasRealSource(this.scan)) {
+          if (repoHasRealSource(this.scan)) {
             policy.deployment_intent = "govern";
           } else {
-            const roleNames = Object.keys(policy.roles).filter(r => r !== "default");
-            policy.deployment_intent = roleNames.length > 0 ? "build_multi" : "build_single";
+            const roleCount = Object.keys(policy.roles).length;
+            policy.deployment_intent =
+              roleCount > 1 ? "build_multi" : "build_single";
           }
         }
 
