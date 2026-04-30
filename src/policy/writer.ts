@@ -109,6 +109,29 @@ const MCP_CONFIG = {
 };
 
 /**
+ * True when an existing entry under .mcp.json's mcpServers.aegis is
+ * a usable aegis-mcp connection. The minimum requirement is that
+ * `command` equals "aegis-mcp" so the runtime invokes the right
+ * binary. Args are not validated — users may legitimately customize
+ * them (e.g. `--project` pointing at a sub-project), and the merge
+ * path's job is to preserve that customization rather than enforce
+ * a canonical shape. Other fields beyond command/args (type, env,
+ * future MCP-spec additions) are tolerated.
+ *
+ * Returns false for null, primitives, arrays, plain objects with a
+ * missing or non-matching command field. Those cases route through
+ * the skipped path so the user can fix the entry without having
+ * their value silently overwritten.
+ */
+function isUsableAegisEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const e = entry as { command?: unknown };
+  return e.command === "aegis-mcp";
+}
+
+/**
  * Write the complete .agentpolicy/ directory to disk.
  * Also writes .mcp.json to the project root for MCP auto-connection.
  * Returns the list of files created.
@@ -276,15 +299,66 @@ export function writePolicy(
         status: "skipped",
         reason,
       });
+    } else if (existing.mcpServers === undefined) {
+      // Top-level object exists, no mcpServers key yet — add the
+      // section with our entry. Preserves any other top-level keys
+      // the user has (mcpRoots, comments, future MCP extensions).
+      const merged = {
+        ...existing,
+        mcpServers: {
+          [mcpServerKey]: MCP_CONFIG.mcpServers.aegis,
+        },
+      };
+      writeFileAtomic(
+        mcpConfigPath,
+        JSON.stringify(merged, null, 2) + "\n"
+      );
+      outcomes.push({ path: ".mcp.json", status: "updated" });
+    } else if (
+      existing.mcpServers === null ||
+      typeof existing.mcpServers !== "object" ||
+      Array.isArray(existing.mcpServers)
+    ) {
+      // mcpServers is present but unusable shape (string, number,
+      // null, array, etc.). Refuse to clobber — silently coercing
+      // to {} and re-serializing would discard whatever the user
+      // had at that key. Surface as skipped with a reason naming
+      // the shape problem; the closing UX shows the snippet to
+      // paste manually after they fix or remove the bad value.
+      outcomes.push({
+        path: ".mcp.json",
+        status: "skipped",
+        reason: `existing .mcp.json has an unexpected mcpServers value (not a JSON object); fix or remove that key, then re-run aegis init or paste the snippet — see the closing notes`,
+      });
     } else {
-      const servers =
-        existing.mcpServers &&
-        typeof existing.mcpServers === "object" &&
-        !Array.isArray(existing.mcpServers)
-          ? (existing.mcpServers as Record<string, unknown>)
-          : {};
+      const servers = existing.mcpServers as Record<string, unknown>;
       if (mcpServerKey in servers) {
-        outcomes.push({ path: ".mcp.json", status: "unchanged" });
+        // Aegis key exists. Two sub-cases:
+        //   (a) Usable entry — leave alone, preserve any user
+        //       customization to args.
+        //   (b) Unusable entry — null, wrong command, malformed,
+        //       missing the command field. Refuse to clobber for
+        //       the same reason as the unexpected-shape branch
+        //       above: silently overwriting a user-authored value
+        //       is destructive. Surface as skipped with a reason
+        //       naming the validation gap; the user fixes the
+        //       entry or removes it and re-runs init.
+        //
+        // "Usable" means command field equals "aegis-mcp" — that's
+        // the bin name the runtime needs to invoke. Args are not
+        // validated because users may legitimately customize them
+        // (e.g. --project to point at a sub-project). Other fields
+        // beyond command/args (type, env, etc. — future MCP spec
+        // additions) are tolerated.
+        if (isUsableAegisEntry(servers[mcpServerKey])) {
+          outcomes.push({ path: ".mcp.json", status: "unchanged" });
+        } else {
+          outcomes.push({
+            path: ".mcp.json",
+            status: "skipped",
+            reason: `existing .mcp.json has an "aegis" entry under mcpServers but it is not a usable aegis-mcp connection (its command field must equal "aegis-mcp"); fix or remove that entry, then re-run aegis init or paste the snippet — see the closing notes`,
+          });
+        }
       } else {
         const merged = {
           ...existing,
