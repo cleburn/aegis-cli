@@ -26,6 +26,7 @@ import {
   type PostCompletionMode,
 } from "./system-prompt.js";
 import { validatePolicyObject } from "../policy/validator.js";
+import { policyReadRegexAlternatives } from "../policy/manifest.js";
 import { repoHasRealSource } from "./scanner.js";
 import { AegisExit } from "../abort.js";
 import type { TerminalUI } from "../ui/terminal.js";
@@ -648,17 +649,23 @@ export class DiscoveryEngine {
     // the EXISTING POLICY BASELINE section of the extraction prompt
     // — concatenating both into the extraction input wastes prompt
     // budget and gives the LLM two sources of truth for the same
-    // content. The regex MUST mirror the scanner's FIXED_POLICY_FILES
-    // + roles glob exactly (scanner.ts:982-994): broader matching
-    // would silently drop context the user explicitly asked Aegis
-    // to read (e.g. a session transcript, overrides.jsonl, future
-    // state files); narrower matching would leak duplicated content
-    // back into extraction. File reads OUTSIDE the baseline (charter
-    // docs, external research, anything the user pointed Aegis at
-    // for context) are NOT elided — those carry genuine context
-    // that belongs in extraction input.
-    const POLICY_READ_RE =
-      /^\[system: file read\] Contents of \.agentpolicy\/(constitution|governance|state\/ledger|roles\/[^/:]+)\.json:/;
+    // content. The regex MUST mirror the scanner's policy floor
+    // exactly: broader matching would silently drop context the
+    // user explicitly asked Aegis to read (e.g. a session transcript,
+    // overrides.jsonl, future state files); narrower matching would
+    // leak duplicated content back into extraction. File reads
+    // OUTSIDE the baseline (charter docs, external research,
+    // anything the user pointed Aegis at for context) are NOT
+    // elided — those carry genuine context that belongs in
+    // extraction input.
+    //
+    // Built from the centralized manifest's regex-alternatives
+    // helper so a future spec change to the floor (renamed file,
+    // added file, moved path) updates exactly one place
+    // (manifest.ts) and this regex follows automatically.
+    const POLICY_READ_RE = new RegExp(
+      `^\\[system: file read\\] Contents of \\.agentpolicy/(${policyReadRegexAlternatives()})\\.json:`
+    );
 
     // Carry forward a description of the previous attempt's failure
     // so the retry can address the specific defect rather than

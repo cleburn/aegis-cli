@@ -12,7 +12,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import ignoreLib from "ignore";
-import { validatePolicyObject, ROLE_NAME_PATTERN } from "./validator.js";
+import { validatePolicyObject } from "./validator.js";
+import { ROLE_NAME_PATTERN } from "./manifest.js";
 
 export interface PolicyFiles {
   constitution: Record<string, unknown>;

@@ -9,6 +9,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import {
+  POLICY_FLOOR,
+  ROLES_DIR_RELATIVE,
+  ROLE_SCHEMA,
+  ROLE_NAME_PATTERN,
+  isReservedRoleName,
+} from "./manifest.js";
 
 const require = createRequire(import.meta.url);
 const Ajv = require("ajv").default;
@@ -34,27 +41,13 @@ export interface PolicyObject {
   ledger: Record<string, unknown>;
 }
 
-/** Schema-defined role-name pattern. Any role file or object must match. */
-export const ROLE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
-
 /**
- * Reserved filenames on Windows — these pass ROLE_NAME_PATTERN but
- * cannot be created as files on NTFS regardless of extension. We keep
- * the CLI portable to Windows users even though the build script and
- * primary dev targets are POSIX.
+ * Re-export role-naming rules from the manifest so existing
+ * imports of these names from validator.ts (e.g. writer.ts) keep
+ * working. The canonical definitions live in manifest.ts; this
+ * file is a façade for the role-name surface.
  */
-const WINDOWS_RESERVED_BASENAMES = new Set<string>([
-  "con", "prn", "nul", "aux",
-  "com0", "com1", "com2", "com3", "com4",
-  "com5", "com6", "com7", "com8", "com9",
-  "lpt0", "lpt1", "lpt2", "lpt3", "lpt4",
-  "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-]);
-
-/** True when the name is safe to use as a filename on every platform. */
-export function isReservedRoleName(name: string): boolean {
-  return WINDOWS_RESERVED_BASENAMES.has(name.toLowerCase());
-}
+export { ROLE_NAME_PATTERN, isReservedRoleName };
 
 function loadSchema(name: string): object {
   const schemaPath = path.join(SCHEMA_DIR, `${name}.schema.json`);
@@ -64,9 +57,13 @@ function loadSchema(name: string): object {
 /**
  * Validate an in-memory object against a bundled schema.
  * Used both for validating files read from disk and for validating
- * extracted policy before it touches the filesystem.
+ * extracted policy before it touches the filesystem. Exported so
+ * the scanner can reuse the same validation when deciding whether
+ * an on-disk policy file is usable as a return-visit baseline (the
+ * write side and the read side share the same schema check rather
+ * than each having its own surface).
  */
-function validateAgainstSchema(
+export function validateAgainstSchema(
   data: unknown,
   schemaName: string,
   label: string
@@ -122,20 +119,40 @@ export function validateFile(
 export function validatePolicyObject(policy: PolicyObject): ValidationResult[] {
   const results: ValidationResult[] = [];
 
-  results.push(validateAgainstSchema(policy.constitution, "constitution", "constitution.json"));
-  results.push(validateAgainstSchema(policy.governance, "governance", "governance.json"));
+  // Floor schemas (constitution + governance + ledger). The
+  // PolicyObject field name maps directly to the manifest entry's
+  // `name`, which is also the schema name and the basename of the
+  // file under .agentpolicy/. One source of truth for the
+  // [field, schema, path] triple instead of three places repeating
+  // the same string.
+  for (const entry of POLICY_FLOOR) {
+    // Cast through `unknown` because PolicyObject doesn't carry an
+    // index signature — the field names match the manifest entry's
+    // `name` literal type by construction (constitution, governance,
+    // ledger), and a typo would surface as a runtime undefined that
+    // ajv would reject.
+    const data = (policy as unknown as Record<string, unknown>)[entry.name];
+    results.push(
+      validateAgainstSchema(data, entry.schema, entry.relativePath)
+    );
+  }
 
   if (!policy.roles || Object.keys(policy.roles).length === 0) {
     results.push({
-      file: "roles/",
+      file: `${ROLES_DIR_RELATIVE}/`,
       valid: false,
-      errors: ["At least one role is required (expected default.json)"],
+      // Floor is "at least one role" — naming default.json as
+      // "expected" overclaims (the spec accepts any role name) and
+      // contradicts the rule that default.json is deletable like
+      // any other role on return visits. Plain message instead.
+      errors: ["At least one role is required"],
     });
   } else {
     for (const [roleName, roleData] of Object.entries(policy.roles)) {
+      const displayPath = `${ROLES_DIR_RELATIVE}/${roleName}.json`;
       if (!ROLE_NAME_PATTERN.test(roleName)) {
         results.push({
-          file: `roles/${roleName}.json`,
+          file: displayPath,
           valid: false,
           errors: [
             `Role name "${roleName}" does not match ${ROLE_NAME_PATTERN} — role names must be lowercase alphanumeric with _ or -.`,
@@ -145,7 +162,7 @@ export function validatePolicyObject(policy: PolicyObject): ValidationResult[] {
       }
       if (isReservedRoleName(roleName)) {
         results.push({
-          file: `roles/${roleName}.json`,
+          file: displayPath,
           valid: false,
           errors: [
             `Role name "${roleName}" is reserved on Windows and cannot be used as a filename on every platform.`,
@@ -153,11 +170,11 @@ export function validatePolicyObject(policy: PolicyObject): ValidationResult[] {
         });
         continue;
       }
-      results.push(validateAgainstSchema(roleData, "role", `roles/${roleName}.json`));
+      results.push(
+        validateAgainstSchema(roleData, ROLE_SCHEMA, displayPath)
+      );
     }
   }
-
-  results.push(validateAgainstSchema(policy.ledger, "ledger", "state/ledger.json"));
 
   return results;
 }
@@ -166,6 +183,13 @@ export function validatePolicyObject(policy: PolicyObject): ValidationResult[] {
  * Validate the entire .agentpolicy/ directory on disk. Returns an
  * empty array when the directory is absent so the CLI can distinguish
  * "no policy here" from "policy exists but is invalid."
+ *
+ * Walks the spec floor from the centralized manifest. Constitution,
+ * governance, and ledger come from POLICY_FLOOR; the roles/
+ * directory is walked separately because role count is variable.
+ * Result file paths are project-relative (.agentpolicy/...) rather
+ * than absolute so `aegis validate` output can be pasted into bug
+ * reports / screenshots without leaking the user's home directory.
  */
 export function validatePolicy(projectRoot: string): ValidationResult[] {
   const policyDir = path.join(projectRoot, ".agentpolicy");
@@ -175,35 +199,31 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
 
   const results: ValidationResult[] = [];
 
-  // Constitution — required
-  const constitutionPath = path.join(policyDir, "constitution.json");
-  if (fs.existsSync(constitutionPath)) {
-    results.push(validateFile(constitutionPath, "constitution"));
-  } else {
-    results.push({
-      file: constitutionPath,
-      valid: false,
-      errors: ["File not found (required)"],
-    });
-  }
-
-  // Governance — required
-  const governancePath = path.join(policyDir, "governance.json");
-  if (fs.existsSync(governancePath)) {
-    results.push(validateFile(governancePath, "governance"));
-  } else {
-    results.push({
-      file: governancePath,
-      valid: false,
-      errors: ["File not found (required)"],
-    });
+  // Floor files (constitution + governance + ledger). Walk the
+  // manifest so a future spec addition adds one entry to manifest.ts
+  // and this loop covers it without code change here.
+  for (const entry of POLICY_FLOOR) {
+    const filePath = path.join(policyDir, entry.relativePath);
+    const displayPath = `.agentpolicy/${entry.relativePath}`;
+    if (fs.existsSync(filePath)) {
+      const result = validateFile(filePath, entry.schema);
+      result.file = displayPath;
+      results.push(result);
+    } else {
+      results.push({
+        file: displayPath,
+        valid: false,
+        errors: ["File not found (required)"],
+      });
+    }
   }
 
   // Roles — at least one required, must match schema pattern
-  const rolesDir = path.join(policyDir, "roles");
+  const rolesDir = path.join(policyDir, ROLES_DIR_RELATIVE);
+  const rolesDisplay = `.agentpolicy/${ROLES_DIR_RELATIVE}/`;
   if (!fs.existsSync(rolesDir)) {
     results.push({
-      file: rolesDir,
+      file: rolesDisplay,
       valid: false,
       errors: ["Directory not found (required)"],
     });
@@ -213,16 +233,17 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
       .filter((f) => f.endsWith(".json"));
     if (roleFiles.length === 0) {
       results.push({
-        file: rolesDir,
+        file: rolesDisplay,
         valid: false,
-        errors: ["No role files found (at least one required, typically default.json)"],
+        errors: ["No role files found (at least one required)"],
       });
     } else {
       for (const roleFile of roleFiles) {
         const bareName = roleFile.replace(/\.json$/, "");
+        const displayPath = `.agentpolicy/${ROLES_DIR_RELATIVE}/${roleFile}`;
         if (!ROLE_NAME_PATTERN.test(bareName)) {
           results.push({
-            file: path.join(rolesDir, roleFile),
+            file: displayPath,
             valid: false,
             errors: [
               `Role filename "${roleFile}" does not match ${ROLE_NAME_PATTERN}.`,
@@ -232,7 +253,7 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
         }
         if (isReservedRoleName(bareName)) {
           results.push({
-            file: path.join(rolesDir, roleFile),
+            file: displayPath,
             valid: false,
             errors: [
               `Role filename "${roleFile}" uses a Windows-reserved name.`,
@@ -240,21 +261,14 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
           });
           continue;
         }
-        results.push(validateFile(path.join(rolesDir, roleFile), "role"));
+        const result = validateFile(
+          path.join(rolesDir, roleFile),
+          ROLE_SCHEMA
+        );
+        result.file = displayPath;
+        results.push(result);
       }
     }
-  }
-
-  // Ledger — required
-  const ledgerPath = path.join(policyDir, "state", "ledger.json");
-  if (fs.existsSync(ledgerPath)) {
-    results.push(validateFile(ledgerPath, "ledger"));
-  } else {
-    results.push({
-      file: ledgerPath,
-      valid: false,
-      errors: ["File not found (required)"],
-    });
   }
 
   return results;

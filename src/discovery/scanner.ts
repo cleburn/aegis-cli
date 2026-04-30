@@ -4,6 +4,12 @@ import { glob } from "glob";
 import ignoreLib from "ignore";
 import mammoth from "mammoth";
 import * as pdfParse from "pdf-parse";
+import {
+  POLICY_FLOOR,
+  POLICY_FLOOR_PATHS,
+  ROLES_DIR_RELATIVE,
+  ROLES_GLOB,
+} from "../policy/manifest.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -1005,15 +1011,10 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // and does not belong in the extraction baseline. The previous
     // recursive glob misclassified session transcripts as policy and
     // would silently treat any future state-dir artifact the same
-    // way; an explicit allowlist names the contract directly and
-    // self-documents intent.
-    const FIXED_POLICY_FILES = [
-      "constitution.json",
-      "governance.json",
-      "state/ledger.json",
-    ];
+    // way; the centralized POLICY_FLOOR manifest names the contract
+    // directly and self-documents intent.
     try {
-      const fixedPresent = FIXED_POLICY_FILES.filter((rel) =>
+      const fixedPresent = POLICY_FLOOR_PATHS.filter((rel) =>
         fs.existsSync(path.join(policyDir, rel))
       );
       // Sort role files alphabetically so the prompt ordering is
@@ -1022,11 +1023,18 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       // most systems, which varies by filesystem and inode layout);
       // sorting here gives a stable briefing for prompt-cache hits
       // and human-readable diffs across sessions.
-      const roleFiles = glob.sync("roles/*.json", { cwd: policyDir }).sort();
+      const roleFiles = glob.sync(ROLES_GLOB, { cwd: policyDir }).sort();
+      // Order: non-ledger floor files, then role files, then the
+      // ledger last. Pull the ledger path from the manifest so a
+      // future spec change that renames or moves the ledger doesn't
+      // desync the briefing layout from the floor definition.
+      const ledgerPath =
+        POLICY_FLOOR.find((e) => e.name === "ledger")?.relativePath ??
+        "state/ledger.json";
       existingPolicyFiles = [
-        ...fixedPresent.filter((f) => f !== "state/ledger.json"),
+        ...fixedPresent.filter((f) => f !== ledgerPath),
         ...roleFiles,
-        ...fixedPresent.filter((f) => f === "state/ledger.json"),
+        ...fixedPresent.filter((f) => f === ledgerPath),
       ];
     } catch {
       // Can't enumerate directory — leave existingPolicyFiles empty
@@ -1128,36 +1136,26 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // the loaded set means any partial load routes through the
     // empty-baseline branch.
     //
-    // TODO (Cluster 4 / manifest centralization): this gate verifies
-    // parseable JSON + non-empty + floor presence + every enumerated
-    // file loaded, but does NOT run schema validation. A baseline
-    // can pass here yet still fail validatePolicyObject if
-    // extraction round-trips it unchanged. validator.ts already owns
-    // the per-file schema logic; the cluster that centralizes the
-    // policy contract surface (currently duplicated across this
-    // file, validator.ts, writer.ts, and engine.ts) is the right
-    // place to surface validateFileContent through to the scanner
-    // so this gate matches writer-side acceptance.
+    // TODO (Cluster 4): this gate verifies parseable JSON + non-empty
+    // + floor presence + every enumerated file loaded, but does NOT
+    // run schema validation. A baseline can pass here yet still fail
+    // validatePolicyObject if extraction round-trips it unchanged.
+    // validator.ts now exports validateAgainstSchema for this exact
+    // case; the schema-validation hook lands in a follow-up commit
+    // alongside this manifest-centralization pass.
     const loadedPaths = new Set(
       existingPolicyContents.map((c) => c.path)
     );
     const allEnumeratedLoaded = existingPolicyFiles.every((rel) =>
       loadedPaths.has(`.agentpolicy/${rel}`)
     );
-    const hasConstitution = loadedPaths.has(
-      ".agentpolicy/constitution.json"
+    const allFloorLoaded = POLICY_FLOOR.every((entry) =>
+      loadedPaths.has(`.agentpolicy/${entry.relativePath}`)
     );
-    const hasGovernance = loadedPaths.has(".agentpolicy/governance.json");
-    const hasLedger = loadedPaths.has(".agentpolicy/state/ledger.json");
     const hasRole = existingPolicyContents.some((c) =>
-      c.path.startsWith(".agentpolicy/roles/")
+      c.path.startsWith(`.agentpolicy/${ROLES_DIR_RELATIVE}/`)
     );
-    hasUsableBaseline =
-      allEnumeratedLoaded &&
-      hasConstitution &&
-      hasGovernance &&
-      hasLedger &&
-      hasRole;
+    hasUsableBaseline = allEnumeratedLoaded && allFloorLoaded && hasRole;
   }
 
   // ── Session transcripts ──────────────────────────────────────────
