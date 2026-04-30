@@ -1155,6 +1155,33 @@ export async function scanRepo(root: string): Promise<ScanResult> {
           );
           continue;
         }
+
+        // Role-file identity cross-check: the on-disk filename's
+        // bare name (e.g. roles/frontend.json → "frontend") must
+        // match the inner role.name. The role schema validates the
+        // inner shape in isolation; this check catches a hand-
+        // edited or otherwise out-of-sync file where the filename
+        // and the inner role.name disagree. A mismatched baseline
+        // would feed extraction one identity at the outer/policy.roles
+        // key (built from the filename) and a different identity
+        // inside role.name — confusing the LLM about what the role
+        // is actually called and breaking deleted_role_names
+        // matching on return visits.
+        if (schemaName === ROLE_SCHEMA) {
+          const bareName = path.basename(policyFile, ".json");
+          const declaredName = (
+            parsedJson as { role?: { name?: unknown } }
+          ).role?.name;
+          if (
+            typeof declaredName === "string" &&
+            declaredName !== bareName
+          ) {
+            process.stderr.write(
+              `[aegis] policy file ".agentpolicy/${policyFile}" has role.name "${declaredName}" but the filename implies "${bareName}". Skipping; treating session as near-first-time.\n`
+            );
+            continue;
+          }
+        }
       }
 
       content.path = `.agentpolicy/${policyFile}`;

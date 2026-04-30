@@ -170,9 +170,42 @@ export function validatePolicyObject(policy: PolicyObject): ValidationResult[] {
         });
         continue;
       }
-      results.push(
-        validateAgainstSchema(roleData, ROLE_SCHEMA, displayPath)
+      const result = validateAgainstSchema(
+        roleData,
+        ROLE_SCHEMA,
+        displayPath
       );
+
+      // Cross-check: the outer object key (which the writer uses to
+      // choose the on-disk filename) must match the inner role.name
+      // (which agents see at runtime and which deleted_role_names
+      // matches against). Schema validation alone does NOT enforce
+      // this — the role schema validates the inner shape in
+      // isolation, with no knowledge of the outer key chosen by
+      // extraction. Without the check, schema-valid output like
+      //   roles.frontend = { role: { name: "backend", ... }, ... }
+      // would land on disk as roles/frontend.json with an inner
+      // role.name of "backend", silently splitting the role's
+      // identity across the filename, the deletion vocabulary, and
+      // the human-facing label. Run this only when schema validation
+      // passed (otherwise role.name's type isn't guaranteed) — and
+      // append the mismatch onto the same ValidationResult so a
+      // single file produces a single failure entry rather than two.
+      if (result.valid) {
+        const declaredName = (
+          roleData as { role?: { name?: unknown } }
+        ).role?.name;
+        if (
+          typeof declaredName === "string" &&
+          declaredName !== roleName
+        ) {
+          result.valid = false;
+          result.errors.push(
+            `Role identity mismatch: the outer key "${roleName}" does not equal the inner role.name "${declaredName}". The writer uses the outer key to choose the filename; agents and deleted_role_names use role.name. They must match.`
+          );
+        }
+      }
+      results.push(result);
     }
   }
 
