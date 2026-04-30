@@ -173,11 +173,42 @@ function UserTurn({ message }: { message: string }) {
 //
 // Renders the wordmark, tagline, metadata block (version, attribution,
 // update hint), and command reference at the top of the conversation.
-// Both first-time and return visit modes use this — the `mode` flag is
-// preserved for any future divergence but currently renders the same
-// content in both cases.
+//
+// Two render modes:
+//   - "full" (first-time init): full splash — wordmark + tagline +
+//     metadata block + commands reference. The user is meeting Aegis
+//     for the first time; the splash earns its keep.
+//   - "quiet" (return visit): compact one-line acknowledgment with
+//     the version. The user knows what Aegis is on a return visit;
+//     the full splash repeats information they already have. The
+//     update check at startup (bin/aegis.ts) already surfaces a
+//     newer version on stderr if one exists, so the metadata block's
+//     update line isn't load-bearing here.
 
-function BannerHeader({ version }: { version: string; mode: "full" | "quiet" }) {
+function BannerHeader({
+  version,
+  mode,
+}: {
+  version: string;
+  mode: "full" | "quiet";
+}) {
+  if (mode === "quiet") {
+    return (
+      <Box flexDirection="column">
+        <Text>{" "}</Text>
+        <Box>
+          <Text>{"  "}</Text>
+          <Text color="#5B8DEF" bold>
+            {"Aegis"}
+          </Text>
+          <Text>{" "}</Text>
+          <Text dimColor>{`v${version} · welcome back`}</Text>
+        </Box>
+        <Text>{" "}</Text>
+      </Box>
+    );
+  }
+
   const logoLines = AEGIS_LOGO.split("\n");
   const rule = "─".repeat(HEADER_RULE_WIDTH);
   const labelWidth = 14; // pad labels so values align in a column
@@ -271,12 +302,35 @@ function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extractio
     return animations[Math.floor(Math.random() * animations.length)];
   });
 
+  // Two animation cadences. Thinking-mode animations (dots, pulse,
+  // ambient cycles) loop indefinitely — they're decorative time-fill.
+  // Extraction-mode is the shield-assembly animation, a one-shot
+  // sequence that builds up to a complete shield. Looping it makes
+  // the shield visually disassemble and reassemble repeatedly when
+  // extraction takes longer than (frames * 600ms), which is most of
+  // the time. Hold on the final frame after one pass and stop the
+  // timer to avoid unnecessary re-renders while the extraction call
+  // continues.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setFrameIndex((i) => (i + 1) % animation.length);
+    let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      setFrameIndex((i) => {
+        if (mode === "extraction") {
+          if (i + 1 >= animation.length) {
+            if (timer) {
+              clearInterval(timer);
+              timer = null;
+            }
+            return animation.length - 1;
+          }
+          return i + 1;
+        }
+        return (i + 1) % animation.length;
+      });
     }, 600);
-    return () => clearInterval(timer);
-  }, [animation]);
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [animation, mode]);
 
   const frame = animation[frameIndex];
   const colored = colorizeThinking(frame);
