@@ -87,8 +87,17 @@ export async function initCommand(): Promise<void> {
     const scan = await scanRepo(cwd);
 
     // First-time init: play the full intro sequence
-    // Return visit (existing policy or prior sessions): quiet welcome
-    if (scan.hasExistingPolicy) {
+    // Return visit (usable baseline on disk): quiet welcome
+    //
+    // Gate on hasUsableBaseline rather than hasExistingPolicy so a
+    // stray empty `.agentpolicy/` directory (left by a Ctrl+C during
+    // API-key resolution on a prior aborted init, or by a mid-write
+    // failure of writePolicy) does not greet the user as a return
+    // visitor. The full intro plays whenever the on-disk state is
+    // not actually a usable starting point — partial baselines, empty
+    // dirs, malformed JSON all route through here instead of the
+    // return-visit welcome.
+    if (scan.hasUsableBaseline) {
       ui.showWelcome(version);
     } else {
       await ui.playIntro(version);

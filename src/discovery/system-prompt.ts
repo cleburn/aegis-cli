@@ -262,14 +262,16 @@ function buildOpeningInstructions(
 ): string {
   // ── Return visit ─────────────────────────────────────────────────
   if (scan.hasExistingPolicy) {
-    const hasLoadedPolicy = scan.existingPolicyContents.length > 0;
     const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
 
-    // Return visit with no readable policy content — the directory
-    // exists but the files are empty, malformed, or unreadable. Do
-    // not pretend to know what's in place. Acknowledge the situation
-    // plainly and ask the human to rebuild or reconstruct.
-    if (!hasLoadedPolicy) {
+    // Return visit with no usable baseline — the directory exists
+    // but the spec floor (constitution + governance + ledger + at
+    // least one role) was not fully loaded as parseable, non-empty
+    // JSON. That covers empty dirs left by aborted prior inits,
+    // partial hand-edits, malformed content, and unreadable files.
+    // Do not pretend to know what's in place. Acknowledge the
+    // situation plainly and ask the human to rebuild or reconstruct.
+    if (!scan.hasUsableBaseline) {
       const transcriptNote =
         transcriptCount > 0
           ? ` You do have ${transcriptCount} prior session transcript(s) loaded, so you have some history of past decisions, but no current policy baseline.`

@@ -60,6 +60,20 @@ export interface ScanResult {
   configFiles: string[];
   /** Whether .agentpolicy/ already exists */
   hasExistingPolicy: boolean;
+  /**
+   * Whether the on-disk .agentpolicy/ provides a baseline downstream
+   * code can rely on as a return-visit starting point. True iff the
+   * full spec floor (constitution.json + governance.json +
+   * state/ledger.json + at least one role file) all loaded as
+   * non-empty parseable JSON. A directory that exists but has
+   * missing, empty, malformed, or unreadable floor pieces is NOT
+   * a usable baseline — partial state from an aborted prior init,
+   * stray empty `.agentpolicy/` left by a Ctrl+C during API-key
+   * resolution, or hand-edited corruption all fall through to this
+   * branch so the prompt and extraction code route the session as
+   * near-first-time rather than trusting a half-loaded baseline.
+   */
+  hasUsableBaseline: boolean;
   /** Existing .agentpolicy files if found */
   existingPolicyFiles: string[];
   /** Contents of existing .agentpolicy files */
@@ -967,6 +981,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const hasExistingPolicy = fs.existsSync(policyDir);
   let existingPolicyFiles: string[] = [];
   const existingPolicyContents: FileContent[] = [];
+  let hasUsableBaseline = false;
 
   if (hasExistingPolicy) {
     // Policy contract surface is exactly four shapes — the spec floor
@@ -1010,27 +1025,96 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // default — the extraction prompt declares this content the
     // "literal starting point" the LLM must preserve verbatim, so
     // any silent mid-document truncation here corrupts the baseline.
-    // A null return from readFileSafe means the file exceeded 1MB,
-    // is not a regular file, has restrictive permissions, or vanished
-    // between the directory listing and the read; any of those would
-    // silently drop named policy content from the baseline. Throw
-    // with a specific path so the user can investigate rather than
-    // have init limp along on a known-bad input.
+    //
+    // Each candidate file must clear three gates before it joins
+    // the baseline:
+    //   1. Read succeeded (readFileSafe returned a FileContent, not
+    //      null or UNSUPPORTED_BINARY). Read failure can mean over
+    //      the 1MB hard ceiling, restricted permissions, not a
+    //      regular file, or vanished between listing and read.
+    //   2. Content is non-empty after trimming. An empty file is
+    //      typically a partial-write artifact (atomic-rename
+    //      interrupted) or a hand-cleared placeholder, not a
+    //      baseline.
+    //   3. Content parses as valid JSON. Malformed JSON cannot be
+    //      fed to the extraction prompt as "literal starting point"
+    //      without poisoning the model's understanding of what the
+    //      policy currently is.
+    //
+    // Files failing any gate are surfaced to stderr (so a partial
+    // baseline is visible, not silent) and skipped. A previous
+    // version threw on unreadable files so silent baseline drift
+    // could not slip past on a real return visit; that's still the
+    // right safety target for return-visit corruption, but the same
+    // code path also fires on stray empty `.agentpolicy/`
+    // directories left by an aborted prior init and on partial
+    // hand-edits — aborting init in those cases is hostile (the
+    // user can't even rerun init to fix things). The new behavior
+    // warns loudly, skips the offending file, and lets
+    // hasUsableBaseline (computed below) fall through to false so
+    // the session is routed as near-first-time. Extraction never
+    // sees a half-loaded baseline labeled as authoritative.
     for (const policyFile of existingPolicyFiles) {
       const fullPath = path.join(policyDir, policyFile);
       const content = await readFileSafe(fullPath, {
         maxSize: MAX_FILE_SIZE_ABSOLUTE,
       });
       if (content === null) {
-        throw new Error(
-          `Policy file ".agentpolicy/${policyFile}" could not be loaded — it may exceed the 1MB ceiling, have restrictive permissions, not be a regular file (e.g. directory or dangling symlink), or have vanished between the scan listing and the read. Investigate before re-running aegis init; a corrupted, oversize, or misshaped policy file would otherwise leave a silent gap in the extraction baseline.`
+        process.stderr.write(
+          `[aegis] policy file ".agentpolicy/${policyFile}" could not be read — it may exceed the 1MB ceiling, have restrictive permissions, not be a regular file, or have vanished between listing and read. Skipping; treating session as near-first-time so init can still run.\n`
         );
+        continue;
       }
-      if (typeof content !== "symbol") {
-        content.path = `.agentpolicy/${policyFile}`;
-        existingPolicyContents.push(content);
+      if (typeof content === "symbol") {
+        // UNSUPPORTED_BINARY — policy files must be JSON, not a
+        // binary format that happened to land at this path.
+        process.stderr.write(
+          `[aegis] policy file ".agentpolicy/${policyFile}" is a binary file, not JSON. Skipping; treating session as near-first-time.\n`
+        );
+        continue;
       }
+      const trimmed = content.content.trim();
+      if (trimmed.length === 0) {
+        process.stderr.write(
+          `[aegis] policy file ".agentpolicy/${policyFile}" is empty. Skipping; treating session as near-first-time.\n`
+        );
+        continue;
+      }
+      try {
+        JSON.parse(trimmed);
+      } catch (err) {
+        const detail =
+          err instanceof Error ? err.message : "unknown parse error";
+        process.stderr.write(
+          `[aegis] policy file ".agentpolicy/${policyFile}" is not valid JSON (${detail}). Skipping; treating session as near-first-time.\n`
+        );
+        continue;
+      }
+      content.path = `.agentpolicy/${policyFile}`;
+      existingPolicyContents.push(content);
     }
+
+    // Floor check — the spec requires constitution + governance +
+    // ledger + at least one role for any return-visit context that
+    // downstream consumers can trust. Anything less is partial
+    // state, not a baseline. The on-disk artifacts that DID load
+    // remain in existingPolicyContents for diagnostic visibility,
+    // but hasUsableBaseline gates the "this is your literal starting
+    // point" framing — extraction will not be told that with a
+    // half-present baseline.
+    const loadedPaths = new Set(
+      existingPolicyContents.map((c) => c.path)
+    );
+    const hasConstitution = loadedPaths.has(
+      ".agentpolicy/constitution.json"
+    );
+    const hasGovernance = loadedPaths.has(".agentpolicy/governance.json");
+    const hasLedger = loadedPaths.has(".agentpolicy/state/ledger.json");
+    const hasRole = existingPolicyContents.some((c) =>
+      c.path.startsWith(".agentpolicy/roles/")
+    );
+    hasUsableBaseline =
+      hasConstitution && hasGovernance && hasLedger && hasRole;
   }
 
   // ── Session transcripts ──────────────────────────────────────────
@@ -1316,6 +1400,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     directoryTree,
     configFiles,
     hasExistingPolicy,
+    hasUsableBaseline,
     existingPolicyFiles,
     existingPolicyContents,
     existingSessionTranscripts,
@@ -1349,12 +1434,14 @@ export function formatScanBriefing(scan: ScanResult): string {
   // prompt so the model doesn't claim knowledge it lacks or believe
   // claims the briefing makes about itself. Three return-visit
   // subcases matter because hasExistingPolicy only says the directory
-  // exists — a present-but-empty or unreadable .agentpolicy/ must
-  // not be described as "policy contents loaded" in the prompt.
-  const hasLoadedPolicy = scan.existingPolicyContents.length > 0;
+  // exists — a present-but-empty, partially-loaded, or unreadable
+  // .agentpolicy/ must not be described as "policy contents loaded"
+  // in the prompt. hasUsableBaseline is the single gate: true iff
+  // the full spec floor (constitution + governance + ledger + at
+  // least one role) all loaded as non-empty parseable JSON.
   const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
 
-  if (scan.hasExistingPolicy && hasLoadedPolicy) {
+  if (scan.hasUsableBaseline) {
     // Only name transcripts in the scope list if any were actually
     // loaded. The opener already checks transcriptCount > 0 before
     // mentioning them; the briefing now matches so the prompt doesn't
@@ -1461,7 +1548,15 @@ export function formatScanBriefing(scan: ScanResult): string {
   }
 
   // ── Existing policy ──────────────────────────────────────────────
-  if (scan.hasExistingPolicy && scan.existingPolicyContents.length > 0) {
+  // Only render the full "EXISTING CONTENTS" section when the loaded
+  // set actually constitutes a usable baseline. Partially-loaded
+  // state (e.g. constitution + governance present but ledger missing
+  // or malformed) gets the warning line instead so the prompt
+  // doesn't show partial content under a heading that implies a
+  // complete baseline. The stderr warnings emitted during the scan
+  // are the authoritative diagnostic for which specific files
+  // failed to load.
+  if (scan.hasUsableBaseline) {
     lines.push("");
     lines.push("== EXISTING .agentpolicy/ CONTENTS ==");
     lines.push("");
@@ -1472,7 +1567,9 @@ export function formatScanBriefing(scan: ScanResult): string {
     }
   } else if (scan.hasExistingPolicy) {
     lines.push("");
-    lines.push(`⚠ Existing .agentpolicy/ found with: ${scan.existingPolicyFiles.join(", ")}`);
+    lines.push(
+      `⚠ Existing .agentpolicy/ found but no usable baseline loaded. Files seen on disk: ${scan.existingPolicyFiles.join(", ") || "(none enumerated)"}`
+    );
   }
 
   // ── Sensitive files Aegis noticed but didn't read ────────────────

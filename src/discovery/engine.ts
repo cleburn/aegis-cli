@@ -857,11 +857,17 @@ export class DiscoveryEngine {
 
   /**
    * Format existing policy file contents as a baseline string
-   * for the extraction prompt. Returns undefined if no existing
-   * policy exists (first-time init).
+   * for the extraction prompt. Returns undefined when there is no
+   * usable baseline — first-time init, or a return visit where the
+   * on-disk state did not satisfy the full spec floor (constitution
+   * + governance + ledger + at least one role) as parseable
+   * non-empty JSON. Partial baselines must not be passed to
+   * extraction labeled as "literal starting point" — that's the
+   * silent-drift failure mode the scanner's hasUsableBaseline gate
+   * exists to prevent.
    */
   private buildExistingPolicyBaseline(): string | undefined {
-    if (!this.scan.hasExistingPolicy || this.scan.existingPolicyContents.length === 0) {
+    if (!this.scan.hasUsableBaseline) {
       return undefined;
     }
 
