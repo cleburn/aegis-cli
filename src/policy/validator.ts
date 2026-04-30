@@ -86,22 +86,60 @@ export function validateAgainstSchema(
 }
 
 /**
- * Validate a single policy file against its schema.
+ * Format a read/parse error without leaking the absolute filesystem
+ * path Node embeds in ErrnoException messages. Node's readFileSync
+ * surfaces ENOENT/EACCES/EISDIR/etc. with messages like
+ *   "ENOENT: no such file or directory, open '/Users/foo/.../x.json'"
+ * — the absolute path defeats the project-relative display
+ * treatment the rest of `aegis validate` output uses, so anything
+ * pasted into a bug report or screenshot leaks the user's home
+ * directory through this seam. Map known error codes to clean
+ * messages keyed off the project-relative displayLabel; SyntaxError
+ * (from JSON.parse) doesn't include the path so its message can
+ * pass through verbatim with the displayLabel prefixed for context.
+ */
+function describeFileError(err: unknown, displayLabel: string): string {
+  if (err instanceof SyntaxError) {
+    return `${displayLabel} is not valid JSON: ${err.message}`;
+  }
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    switch (code) {
+      case "ENOENT":
+        return `${displayLabel} not found`;
+      case "EACCES":
+        return `${displayLabel} cannot be read (permission denied)`;
+      case "EISDIR":
+        return `${displayLabel} expected a file but found a directory`;
+      case "EBUSY":
+        return `${displayLabel} is locked or in use`;
+      default:
+        return `${displayLabel} read failed (${code ?? "unknown error"})`;
+    }
+  }
+  return err instanceof Error ? err.message : "Failed to read or parse file";
+}
+
+/**
+ * Validate a single policy file against its schema. The optional
+ * displayLabel lets callers surface a project-relative path in
+ * results and error messages instead of the absolute filesystem
+ * path that Node would otherwise leak via ErrnoException messages.
  */
 export function validateFile(
   filePath: string,
-  schemaName: string
+  schemaName: string,
+  displayLabel?: string
 ): ValidationResult {
+  const label = displayLabel ?? filePath;
   try {
     const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    return validateAgainstSchema(data, schemaName, filePath);
+    return validateAgainstSchema(data, schemaName, label);
   } catch (err) {
     return {
-      file: filePath,
+      file: label,
       valid: false,
-      errors: [
-        err instanceof Error ? err.message : "Failed to read or parse file",
-      ],
+      errors: [describeFileError(err, label)],
     };
   }
 }
@@ -234,14 +272,15 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
 
   // Floor files (constitution + governance + ledger). Walk the
   // manifest so a future spec addition adds one entry to manifest.ts
-  // and this loop covers it without code change here.
+  // and this loop covers it without code change here. validateFile
+  // takes the project-relative displayPath as displayLabel so any
+  // ENOENT/EACCES/parse error messages it surfaces use the
+  // sanitized path rather than the absolute one Node embeds.
   for (const entry of POLICY_FLOOR) {
     const filePath = path.join(policyDir, entry.relativePath);
     const displayPath = `.agentpolicy/${entry.relativePath}`;
     if (fs.existsSync(filePath)) {
-      const result = validateFile(filePath, entry.schema);
-      result.file = displayPath;
-      results.push(result);
+      results.push(validateFile(filePath, entry.schema, displayPath));
     } else {
       results.push({
         file: displayPath,
@@ -294,11 +333,47 @@ export function validatePolicy(projectRoot: string): ValidationResult[] {
           });
           continue;
         }
-        const result = validateFile(
-          path.join(rolesDir, roleFile),
-          ROLE_SCHEMA
+
+        // Inline parse-then-validate-then-identity-check rather
+        // than calling validateFile, because the identity check
+        // needs access to the parsed role.name and validateFile
+        // doesn't expose the parsed data. Mirrors the pattern in
+        // scanner's existing-policy load loop so all three places
+        // that walk role files (writer-side validatePolicyObject,
+        // read-side scanner, disk-side validatePolicy) enforce
+        // the same cross-key-vs-name reconciliation contract.
+        const filePath = path.join(rolesDir, roleFile);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+        } catch (err) {
+          results.push({
+            file: displayPath,
+            valid: false,
+            errors: [describeFileError(err, displayPath)],
+          });
+          continue;
+        }
+        const result = validateAgainstSchema(
+          parsed,
+          ROLE_SCHEMA,
+          displayPath
         );
-        result.file = displayPath;
+
+        if (result.valid) {
+          const declaredName = (
+            parsed as { role?: { name?: unknown } }
+          ).role?.name;
+          if (
+            typeof declaredName === "string" &&
+            declaredName !== bareName
+          ) {
+            result.valid = false;
+            result.errors.push(
+              `Role identity mismatch: filename "${roleFile}" implies role.name "${bareName}" but the file declares role.name "${declaredName}". The filename and role.name must match — agents and deleted_role_names key off role.name; the writer keys off the filename.`
+            );
+          }
+        }
         results.push(result);
       }
     }
