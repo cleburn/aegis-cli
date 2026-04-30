@@ -493,8 +493,14 @@ function showNextSteps(
       );
       break;
     case "skipped":
+      // Generic prefix that fits all skip reasons — parse failure,
+      // unexpected top-level shape, unexpected mcpServers value,
+      // and the non-canonical-command case (where the user's setup
+      // may already be working). The reason text carries the
+      // specific situation; the snippet is shown as a reference,
+      // not an instruction to overwrite a working entry.
       ui.showNote(
-        `Couldn't auto-merge into your existing .mcp.json — ${mcpOutcome.reason ?? "unknown reason"}. Add this entry manually under "mcpServers" in .mcp.json:`
+        `Aegis didn't update your existing .mcp.json — ${mcpOutcome.reason ?? "unknown reason"}. Standard entry to paste under "mcpServers" if you need it:`
       );
       ui.showHighlight(
         `"aegis": { "command": "aegis-mcp", "args": ["--project", "."] }`

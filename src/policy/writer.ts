@@ -292,8 +292,8 @@ export function writePolicy(
 
     if (!existing) {
       const reason = parseError
-        ? `existing .mcp.json is not valid JSON (${parseError.message.slice(0, 200)}); add the aegis-mcp entry manually under mcpServers — see the closing notes for the snippet`
-        : "existing .mcp.json has an unexpected shape (not a JSON object); add the aegis-mcp entry manually under mcpServers — see the closing notes for the snippet";
+        ? `the file is not valid JSON (${parseError.message.slice(0, 200)})`
+        : "the file has an unexpected shape (not a JSON object)";
       outcomes.push({
         path: ".mcp.json",
         status: "skipped",
@@ -328,7 +328,7 @@ export function writePolicy(
       outcomes.push({
         path: ".mcp.json",
         status: "skipped",
-        reason: `existing .mcp.json has an unexpected mcpServers value (not a JSON object); fix or remove that key, then re-run aegis init or paste the snippet — see the closing notes`,
+        reason: `mcpServers has an unexpected value (not a JSON object)`,
       });
     } else {
       const servers = existing.mcpServers as Record<string, unknown>;
@@ -353,10 +353,23 @@ export function writePolicy(
         if (isUsableAegisEntry(servers[mcpServerKey])) {
           outcomes.push({ path: ".mcp.json", status: "unchanged" });
         } else {
+          // The validation here is intentionally strict on the
+          // canonical "aegis-mcp" command name — that's the value
+          // Aegis writes and the most common runtime invocation.
+          // Custom installs that work fine (an absolute path like
+          // /usr/local/bin/aegis-mcp, or a wrapper that ultimately
+          // launches aegis-mcp) will not match the check and fall
+          // through here. The reason text acknowledges that
+          // ambiguity rather than declaring the existing entry
+          // broken — the user knows whether their setup works.
+          // We still take the safe skipped path either way (no
+          // clobber), so a working custom setup is preserved on
+          // disk; the closing UX shows the standard entry as a
+          // reference if the user wants to replace.
           outcomes.push({
             path: ".mcp.json",
             status: "skipped",
-            reason: `existing .mcp.json has an "aegis" entry under mcpServers but it is not a usable aegis-mcp connection (its command field must equal "aegis-mcp"); fix or remove that entry, then re-run aegis init or paste the snippet — see the closing notes`,
+            reason: `the existing "aegis" entry under mcpServers has a non-standard command field — if your setup works, keep it; otherwise replace with the standard entry`,
           });
         }
       } else {
