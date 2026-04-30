@@ -71,11 +71,22 @@ export async function initCommand(): Promise<void> {
   // cleanup callback registered with lock.ts. Both paths converge on
   // writeFinalTranscript via a once-guard so the audit record is
   // preserved exactly once regardless of which exit path fires.
+  //
+  // policyWriteSucceeded gates the closing-entry shape: result.policy
+  // is set as soon as engine.run() returns, but the success branch
+  // still has to call writePolicy + side effects. If anything in
+  // that branch throws (PolicyValidationError, fs error, gitignore
+  // failure surfaced as throw), the transcript must NOT record the
+  // session as a successful write — buildTranscriptEntries falls
+  // back to a "write_failed" closing shape that names the actual
+  // failure instead of falsely reporting success.
   let lockPath: string | null = null;
   let engine: DiscoveryEngine | null = null;
   let result: DiscoveryResult | null = null;
   let fileOutcomes: WriteOutcome[] = [];
   let extractionFailed = false;
+  let policyWriteSucceeded = false;
+  let policyWriteError: Error | null = null;
   let transcriptWritten = false;
 
   // Persist the session transcript wherever we are when this fires.
@@ -95,7 +106,13 @@ export async function initCommand(): Promise<void> {
     if (transcriptWritten || !engine) return;
     transcriptWritten = true;
     try {
-      const entries = buildTranscriptEntries(engine, result, fileOutcomes);
+      const entries = buildTranscriptEntries(
+        engine,
+        result,
+        fileOutcomes,
+        policyWriteSucceeded,
+        policyWriteError
+      );
       const transcriptPath = writeTranscript(cwd, entries);
       try {
         ui.showNote(`Session transcript saved: ${transcriptPath}`);
@@ -182,7 +199,19 @@ export async function initCommand(): Promise<void> {
     //   happened. Surface the error and fall through to transcript
     //   write + non-zero exit.
     if (result.status === "completed" && result.policy) {
-      fileOutcomes = writePolicy(cwd, result.policy);
+      // Capture writePolicy failure so the closing transcript entry
+      // reports write_failed instead of falsely claiming success.
+      // Re-throw so the outer catch surfaces the user-facing error
+      // message and sets process.exitCode — the flag exists only to
+      // gate the audit-trail shape, not to swallow the exception.
+      try {
+        fileOutcomes = writePolicy(cwd, result.policy);
+        policyWriteSucceeded = true;
+      } catch (err) {
+        policyWriteError =
+          err instanceof Error ? err : new Error(String(err));
+        throw err;
+      }
 
       // Apply the .gitignore side effect ONLY if the engine recorded
       // an affirmed [GITIGNORE_CONSENT] marker during discovery. The
@@ -287,9 +316,9 @@ export async function initCommand(): Promise<void> {
  * turn captured during discovery and post-completion). On top of
  * that, append a closing-system entry whose shape reflects how the
  * session actually ended — successful policy write, no-change
- * confirmation, extraction failure, or incomplete (the engine never
- * reached a terminal status, typically a Ctrl+C or an exception
- * during discovery).
+ * confirmation, extraction failure, write failure, or incomplete
+ * (the engine never reached a terminal status, typically a Ctrl+C
+ * or an exception during discovery).
  *
  * The closing entry exists so a forensic pass can read a transcript
  * standalone and tell what happened without re-running the session.
@@ -298,17 +327,29 @@ export async function initCommand(): Promise<void> {
  * specific failure category; for incomplete sessions it just marks
  * that the session did not conclude normally — the conversation
  * itself is the record.
+ *
+ * The success entry is gated on policyWriteSucceeded, not just
+ * result.policy: result.policy is set as soon as engine.run() emits
+ * a valid policy, but the success branch in initCommand still has
+ * to call writePolicy + side effects after that, and any throw
+ * along the way must NOT result in a closing entry that claims the
+ * session succeeded. policyWriteSucceeded flips to true only after
+ * writePolicy returns; any earlier exit through this function on a
+ * result with policy assigned routes through the write_failed shape
+ * and carries the captured error message for forensic context.
  */
 function buildTranscriptEntries(
   engine: DiscoveryEngine,
   result: DiscoveryResult | null,
-  fileOutcomes: WriteOutcome[]
+  fileOutcomes: WriteOutcome[],
+  policyWriteSucceeded: boolean,
+  policyWriteError: Error | null
 ): Array<{ role: string; content: string }> {
   const entries: Array<{ role: string; content: string }> = [
     ...engine.getTranscript(),
   ];
 
-  if (result?.policy) {
+  if (result?.policy && policyWriteSucceeded) {
     entries.push({
       role: "system",
       content: JSON.stringify({
@@ -323,6 +364,24 @@ function buildTranscriptEntries(
         deployment_intent: result.policy.deployment_intent,
         mcp_install: "npm install -g aegis-mcp-server",
         future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
+      }, null, 2),
+    });
+  } else if (result?.policy) {
+    // Extraction emitted a valid policy, but writePolicy threw or
+    // the success branch did not reach the policyWriteSucceeded
+    // flip. Capture the error message (bounded to keep the
+    // transcript compact) so the audit record names what actually
+    // failed instead of falsely claiming success. handoff_prompt
+    // and deployment_intent are intentionally omitted — they
+    // describe a state that did not land on disk.
+    entries.push({
+      role: "system",
+      content: JSON.stringify({
+        type: "session_closing",
+        outcome: "write_failed",
+        write_error: policyWriteError
+          ? policyWriteError.message.slice(0, 500)
+          : "writePolicy did not complete; specific error not captured",
       }, null, 2),
     });
   } else if (result?.extractionFailure) {

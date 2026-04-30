@@ -1102,8 +1102,34 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // but hasUsableBaseline gates the "this is your literal starting
     // point" framing — extraction will not be told that with a
     // half-present baseline.
+    //
+    // The check is strict on every enumerated file, not just floor
+    // membership. If the directory holds five role files but two
+    // failed to load (malformed JSON, empty, unreadable), the
+    // extraction baseline would silently be missing those roles —
+    // the writer would then see them on disk during reconciliation
+    // and preserve them as orphans, exactly the silent-drift mode
+    // the return-visit bundle was closing. Requiring every
+    // enumerated file (every entry in existingPolicyFiles, which
+    // mirrors what fs.existsSync + the roles glob found) to be in
+    // the loaded set means any partial load routes through the
+    // empty-baseline branch.
+    //
+    // TODO (Cluster 4 / manifest centralization): this gate verifies
+    // parseable JSON + non-empty + floor presence + every enumerated
+    // file loaded, but does NOT run schema validation. A baseline
+    // can pass here yet still fail validatePolicyObject if
+    // extraction round-trips it unchanged. validator.ts already owns
+    // the per-file schema logic; the cluster that centralizes the
+    // policy contract surface (currently duplicated across this
+    // file, validator.ts, writer.ts, and engine.ts) is the right
+    // place to surface validateFileContent through to the scanner
+    // so this gate matches writer-side acceptance.
     const loadedPaths = new Set(
       existingPolicyContents.map((c) => c.path)
+    );
+    const allEnumeratedLoaded = existingPolicyFiles.every((rel) =>
+      loadedPaths.has(`.agentpolicy/${rel}`)
     );
     const hasConstitution = loadedPaths.has(
       ".agentpolicy/constitution.json"
@@ -1114,7 +1140,11 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       c.path.startsWith(".agentpolicy/roles/")
     );
     hasUsableBaseline =
-      hasConstitution && hasGovernance && hasLedger && hasRole;
+      allEnumeratedLoaded &&
+      hasConstitution &&
+      hasGovernance &&
+      hasLedger &&
+      hasRole;
   }
 
   // ── Session transcripts ──────────────────────────────────────────

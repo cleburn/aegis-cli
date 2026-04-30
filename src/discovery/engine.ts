@@ -160,15 +160,16 @@ export class DiscoveryEngine {
       const userInput = await this.ui.getUserInput();
 
       // Handle exits gracefully via the typed-exit path so the outer
-      // init command's cleanup runs (lock release, UI destroy). A bare
-      // process.exit here would bypass that.
+      // init command's cleanup runs (lock release, UI destroy, and
+      // transcript persistence — see initCommand's writeFinalTranscript).
+      // A bare process.exit here would bypass all of that.
       if (
         userInput.toLowerCase() === "/quit" ||
         userInput.toLowerCase() === "/exit"
       ) {
         throw new AegisExit(
           0,
-          "No worries — nothing saved yet, but you can pick this up anytime with aegis init."
+          "No worries — your conversation is saved for reference. Pick this up anytime with aegis init."
         );
       }
 

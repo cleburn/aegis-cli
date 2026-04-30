@@ -198,6 +198,18 @@ export function acquireLock(projectRoot: string): string {
  * invocation and the signal handler in registerExitCleanup needs to
  * reach the latest registered callback list. Callers append; nobody
  * removes (a single CLI run is the lifetime).
+ *
+ * NOTE: this state assumes initCommand runs at most once per Node
+ * process lifecycle, which the bin entrypoint guarantees today — a
+ * single command parse, then exit. If the CLI ever moves to a
+ * long-running mode (REPL, multi-command embedding, test harness
+ * reuse of initCommand), this array and the process.once handlers in
+ * registerExitCleanup will need per-invocation isolation: currently
+ * they accumulate across calls, and on a second invocation the
+ * older signal handlers may fire before newer ones, calling
+ * process.exit before the current invocation's cleanup runs. Not a
+ * concern under the current single-shot invocation model, but
+ * documented here so the assumption is visible.
  */
 const cleanupCallbacks: Array<() => void> = [];
 
