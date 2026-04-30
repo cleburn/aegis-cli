@@ -53,6 +53,7 @@ export class AnthropicProvider implements LLMProvider {
     });
 
     let full = "";
+    let stopReason: string | null = null;
 
     for await (const event of stream) {
       if (
@@ -62,7 +63,34 @@ export class AnthropicProvider implements LLMProvider {
         const text = event.delta.text;
         full += text;
         onToken(text);
+      } else if (event.type === "message_delta") {
+        // Anthropic emits stop_reason on the message_delta event near
+        // the end of the stream. Capture it so the loop can react if
+        // the response was truncated rather than completed.
+        const reason = (event.delta as { stop_reason?: string | null })
+          .stop_reason;
+        if (typeof reason === "string") {
+          stopReason = reason;
+        }
       }
+    }
+
+    // Surface max_tokens truncation. The conversation loop in
+    // engine.ts pushes whatever string this returns into the
+    // assistant-side history and the affirmation matchers run
+    // against it — a silent cut-off mid-sentence would leave a
+    // half-finished message that downstream marker logic could
+    // misread. Stream a visible note via onToken (so the user sees
+    // it in real time at the end of the partial response) AND
+    // include it in the returned full string (so the saved
+    // transcript and any future return-visit context carry the
+    // signal of what happened). The note is plain text, not a
+    // control marker, so engine.ts's drainBuffer leaves it alone.
+    if (stopReason === "max_tokens") {
+      const truncationNote =
+        "\n\n[Aegis note: this response was cut off at the model's max_tokens limit. Tell me how to continue or what to skip.]";
+      full += truncationNote;
+      onToken(truncationNote);
     }
 
     return full;
