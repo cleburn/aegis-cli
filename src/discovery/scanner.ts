@@ -9,7 +9,9 @@ import {
   POLICY_FLOOR_PATHS,
   ROLES_DIR_RELATIVE,
   ROLES_GLOB,
+  ROLE_SCHEMA,
 } from "../policy/manifest.js";
+import { validateAgainstSchema } from "../policy/validator.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -1101,8 +1103,9 @@ export async function scanRepo(root: string): Promise<ScanResult> {
         );
         continue;
       }
+      let parsedJson: unknown;
       try {
-        JSON.parse(trimmed);
+        parsedJson = JSON.parse(trimmed);
       } catch (err) {
         const detail =
           err instanceof Error ? err.message : "unknown parse error";
@@ -1111,6 +1114,49 @@ export async function scanRepo(root: string): Promise<ScanResult> {
         );
         continue;
       }
+
+      // Schema-validate against the bundled spec schemas. A baseline
+      // that passes JSON.parse but fails schema validation cannot be
+      // trusted as an authoritative starting point — feeding it to
+      // extraction would teach the model a non-conforming shape as
+      // the literal preserve-verbatim baseline, with the failure
+      // mode of validatePolicyObject rejecting the round-tripped
+      // output later for the same shape problem the input had.
+      // Surface the validation error and skip so hasUsableBaseline
+      // routes the session through the empty-baseline branch.
+      //
+      // Schema name comes from the centralized manifest: floor
+      // entries are looked up by their relativePath; role files
+      // share a single schema. Anything not matching either case
+      // is left unvalidated (defensive — existingPolicyFiles only
+      // ever contains floor + role paths, but the fallback keeps
+      // the loop robust to a future enumeration change).
+      const floorEntry = POLICY_FLOOR.find(
+        (e) => e.relativePath === policyFile
+      );
+      const schemaName: string | null = floorEntry
+        ? floorEntry.schema
+        : policyFile.startsWith(`${ROLES_DIR_RELATIVE}/`)
+          ? ROLE_SCHEMA
+          : null;
+      if (schemaName) {
+        const result = validateAgainstSchema(
+          parsedJson,
+          schemaName,
+          `.agentpolicy/${policyFile}`
+        );
+        if (!result.valid) {
+          const summary = result.errors
+            .slice(0, 3)
+            .join("; ")
+            .slice(0, 300);
+          process.stderr.write(
+            `[aegis] policy file ".agentpolicy/${policyFile}" failed schema validation (${summary}). Skipping; treating session as near-first-time.\n`
+          );
+          continue;
+        }
+      }
+
       content.path = `.agentpolicy/${policyFile}`;
       existingPolicyContents.push(content);
     }
@@ -1136,13 +1182,13 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // the loaded set means any partial load routes through the
     // empty-baseline branch.
     //
-    // TODO (Cluster 4): this gate verifies parseable JSON + non-empty
-    // + floor presence + every enumerated file loaded, but does NOT
-    // run schema validation. A baseline can pass here yet still fail
-    // validatePolicyObject if extraction round-trips it unchanged.
-    // validator.ts now exports validateAgainstSchema for this exact
-    // case; the schema-validation hook lands in a follow-up commit
-    // alongside this manifest-centralization pass.
+    // The per-file load loop above gates each candidate file
+    // through readability, non-empty content, JSON.parse, AND
+    // schema validation against its bundled spec schema. A file
+    // that fails any gate is warned-and-skipped, so existingPolicyContents
+    // contains only schema-conforming baseline pieces. Round-trip
+    // through extraction will not be rejected for a shape problem
+    // the input already had.
     const loadedPaths = new Set(
       existingPolicyContents.map((c) => c.path)
     );
