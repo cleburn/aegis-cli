@@ -95,10 +95,25 @@ export class LockConflictError extends Error {
   readonly holderPid: number;
   readonly lockPath: string;
   constructor(holderPid: number, lockPath: string) {
-    super(
-      `Another aegis process (PID ${holderPid}) is already running in this project. ` +
-        `Wait for it to finish, or delete ${lockPath} if you're certain it's stale.`
-    );
+    // Two failure shapes funnel into this constructor:
+    //   - holderPid > 0: a real running aegis process holds the
+    //     lock. Name the PID so the user can identify or kill it.
+    //   - holderPid <= 0: sentinel for "we couldn't determine a
+    //     PID" — covers a corrupt or empty lock file (readLockContents
+    //     returned null) and the lost-the-wx-race case (two
+    //     contenders both detected stale, both tried to overwrite,
+    //     this one lost). PID 0 is a kernel-reserved value (init on
+    //     Linux), so the prior "Another aegis process (PID 0) is
+    //     already running" wording read like a bug. Different
+    //     message names the actual situation without inventing a
+    //     PID.
+    const message =
+      holderPid > 0
+        ? `Another aegis process (PID ${holderPid}) is already running in this project. ` +
+          `Wait for it to finish, or delete ${lockPath} if you're certain it's stale.`
+        : `Could not acquire the aegis init lock at ${lockPath} — the lock file is corrupt, or another aegis init started simultaneously. ` +
+          `Try again in a moment; if this persists, delete the lock file manually and retry.`;
+    super(message);
     this.name = "LockConflictError";
     this.holderPid = holderPid;
     this.lockPath = lockPath;
