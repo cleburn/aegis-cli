@@ -231,7 +231,7 @@ export async function initCommand(): Promise<void> {
 
       ui.showFilesCreated(formatOutcomes(fileOutcomes));
       ui.showNote(`Policy in place at ${cwd}/.agentpolicy/`);
-      showNextSteps(ui, result.policy);
+      showNextSteps(ui, result.policy, fileOutcomes);
       await runPostCompletionLoop(ui, engine, "completed");
     } else if (result.status === "no_changes") {
       await runPostCompletionLoop(ui, engine, "no_changes");
@@ -441,7 +441,8 @@ function buildTranscriptEntries(
  */
 function showNextSteps(
   ui: TerminalUI,
-  policy: NonNullable<import("../discovery/engine.js").DiscoveryResult["policy"]>
+  policy: NonNullable<import("../discovery/engine.js").DiscoveryResult["policy"]>,
+  outcomes: WriteOutcome[]
 ): void {
   // ── Custom handoff prompt ────────────────────────────────────────
   ui.showHeading(`── Your Handoff Prompt ──`);
@@ -453,13 +454,61 @@ function showNextSteps(
   );
 
   // ── MCP note ─────────────────────────────────────────────────────
+  //
+  // Branch on the actual .mcp.json write outcome so the user-facing
+  // copy matches what landed (or didn't) on disk:
+  //
+  //   created   — fresh .mcp.json, aegis-mcp connection set up.
+  //   updated   — existing .mcp.json had other servers; the aegis-mcp
+  //               entry was merged in alongside them.
+  //   unchanged — existing .mcp.json already had an aegis entry; left
+  //               in place to preserve any user customization.
+  //   skipped   — existing .mcp.json was malformed or unexpectedly
+  //               shaped; refused to clobber. Show the snippet the
+  //               user needs to paste under their mcpServers key.
+  //
+  // The npm package name (`aegis-mcp-server`) is the registry target;
+  // the bin command it provides is `aegis-mcp`, which is also the
+  // mcpServers key in the generated config. Lean on `aegis-mcp` in
+  // prose so the relationship between the package and the runtime
+  // command is visible — the install command itself stays
+  // `aegis-mcp-server`.
   ui.showHeading(`── MCP ──`);
-  ui.showNote(
-    `The Aegis MCP connection (.mcp.json) is already configured. Install the server if you haven't:`
-  );
-  ui.showCommand(
-    `npm install -g aegis-mcp-server`
-  );
+
+  const mcpOutcome = outcomes.find((o) => o.path === ".mcp.json");
+  switch (mcpOutcome?.status) {
+    case "created":
+      ui.showNote(
+        `.mcp.json was created with the aegis-mcp connection. Install the aegis-mcp server if you haven't:`
+      );
+      break;
+    case "updated":
+      ui.showNote(
+        `aegis-mcp connection merged into your existing .mcp.json. Install the aegis-mcp server if you haven't:`
+      );
+      break;
+    case "unchanged":
+      ui.showNote(
+        `.mcp.json already had the aegis-mcp connection — no change needed. Install the aegis-mcp server if you haven't:`
+      );
+      break;
+    case "skipped":
+      ui.showNote(
+        `Couldn't auto-merge into your existing .mcp.json — ${mcpOutcome.reason ?? "unknown reason"}. Add this entry manually under "mcpServers" in .mcp.json:`
+      );
+      ui.showHighlight(
+        `"aegis": { "command": "aegis-mcp", "args": ["--project", "."] }`
+      );
+      ui.showNote(`Then install the aegis-mcp server if you haven't:`);
+      break;
+    default:
+      // Fallback when no .mcp.json outcome reached this point —
+      // shouldn't happen on a successful write but keeps the
+      // closing functional rather than rendering nothing.
+      ui.showNote(`Install the aegis-mcp server if you haven't:`);
+  }
+
+  ui.showCommand(`npm install -g aegis-mcp-server`);
 
   // ── Future session prompt ────────────────────────────────────────
   ui.showHeading(`── For All Future Sessions ──`);

@@ -220,15 +220,86 @@ export function writePolicy(
     });
   }
 
-  // .mcp.json — never overwrite. If the user already has one, leave
-  // it alone and report unchanged so the CLI doesn't pretend it wrote
-  // a fresh file.
+  // .mcp.json — three real cases plus a skip path:
+  //
+  //   - File doesn't exist: write a fresh MCP_CONFIG. status=created.
+  //   - File exists, valid JSON object, has the aegis entry under
+  //     mcpServers: leave it alone (user may have customized args).
+  //     status=unchanged.
+  //   - File exists, valid JSON object, no aegis entry: merge the
+  //     aegis entry alongside whatever else is there, preserving
+  //     every other top-level key and every other server entry.
+  //     status=updated.
+  //   - File exists but is not valid JSON (or not a JSON object):
+  //     refuse to clobber. The user has SOMETHING there — possibly
+  //     a half-finished hand-edit, possibly an unrelated tool's
+  //     config under the same filename. Overwriting would silently
+  //     destroy whatever they had. Surface as skipped with a
+  //     reason; the closing UI shows the snippet they need to
+  //     paste under mcpServers manually.
+  //
+  // Detection key is the "aegis" name under mcpServers. That matches
+  // MCP_CONFIG above and the aegis-mcp bin command. Anyone who has
+  // a legitimately-named-aegis entry from a prior init (or who
+  // edited the file by hand) sees the unchanged path and keeps
+  // their config. Anyone with a different MCP server (e.g. a
+  // shared-team config with notion / linear / etc. servers) gets
+  // the merge path and keeps their other entries.
   const mcpConfigPath = path.join(projectRoot, ".mcp.json");
-  if (fs.existsSync(mcpConfigPath)) {
-    outcomes.push({ path: ".mcp.json", status: "unchanged" });
-  } else {
-    writeFileAtomic(mcpConfigPath, JSON.stringify(MCP_CONFIG, null, 2) + "\n");
+  const mcpServerKey = "aegis";
+
+  if (!fs.existsSync(mcpConfigPath)) {
+    writeFileAtomic(
+      mcpConfigPath,
+      JSON.stringify(MCP_CONFIG, null, 2) + "\n"
+    );
     outcomes.push({ path: ".mcp.json", status: "created" });
+  } else {
+    let existing: Record<string, unknown> | null = null;
+    let parseError: Error | null = null;
+    try {
+      const raw = fs.readFileSync(mcpConfigPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>;
+      }
+    } catch (err) {
+      parseError = err instanceof Error ? err : new Error(String(err));
+    }
+
+    if (!existing) {
+      const reason = parseError
+        ? `existing .mcp.json is not valid JSON (${parseError.message.slice(0, 200)}); add the aegis-mcp entry manually under mcpServers — see the closing notes for the snippet`
+        : "existing .mcp.json has an unexpected shape (not a JSON object); add the aegis-mcp entry manually under mcpServers — see the closing notes for the snippet";
+      outcomes.push({
+        path: ".mcp.json",
+        status: "skipped",
+        reason,
+      });
+    } else {
+      const servers =
+        existing.mcpServers &&
+        typeof existing.mcpServers === "object" &&
+        !Array.isArray(existing.mcpServers)
+          ? (existing.mcpServers as Record<string, unknown>)
+          : {};
+      if (mcpServerKey in servers) {
+        outcomes.push({ path: ".mcp.json", status: "unchanged" });
+      } else {
+        const merged = {
+          ...existing,
+          mcpServers: {
+            ...servers,
+            [mcpServerKey]: MCP_CONFIG.mcpServers.aegis,
+          },
+        };
+        writeFileAtomic(
+          mcpConfigPath,
+          JSON.stringify(merged, null, 2) + "\n"
+        );
+        outcomes.push({ path: ".mcp.json", status: "updated" });
+      }
+    }
   }
 
   // === Role reconciliation (sequenced last) ===
