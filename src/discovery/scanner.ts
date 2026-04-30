@@ -1505,6 +1505,15 @@ export function formatScanBriefing(scan: ScanResult): string {
     lines.push(
       `Scan mode: tiny tier (${scan.scanFileCount} files) — full content scan.`
     );
+  } else if (scan.scanTier === "normal") {
+    // Normal-tier discovery reads HIGH_VALUE_FILES + CI workflows
+    // + the root README (first 200 lines). Source code itself is
+    // NOT read at this tier — only configs and docs. Disclosing
+    // the mode in the briefing keeps the model from claiming
+    // codebase-level familiarity it doesn't have.
+    lines.push(
+      `Scan mode: normal tier (${scan.scanFileCount} files) — targeted read of high-value config and documentation files (no source).`
+    );
   }
 
   lines.push("");

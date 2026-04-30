@@ -396,9 +396,18 @@ Beat 2 — Vocal pivot: Move directly into the first real question: "Tell me abo
 No waiting for acknowledgment between beats. Pivot immediately to the question.`;
   }
 
-  // ── Existing project with files ──────────────────────────────────
+  // ── First-visit with file contents loaded — branch by tier ──────
+  //
+  // Tiny tier reads everything (full first-visit discovery, every
+  // eligible file up to 10KB). The "studied in detail" framing is
+  // accurate. Normal tier reads a targeted subset — high-value
+  // config files (package.json, framework configs, etc.), CI
+  // workflows, and the root README capped at 200 lines. Saying
+  // "studied in detail" there overclaims and the user will catch
+  // it. Two distinct openers keep the tonal accuracy.
   if (scan.fileContents.length > 0) {
-    return `== YOUR OPENING ==
+    if (scan.scanTier === "tiny") {
+      return `== YOUR OPENING ==
 
 This is a first meeting, and you've studied their project in detail. Your opening follows three beats — introduction, expectation setting, then a vocal pivot into the first real question. All three flow naturally as one message.
 
@@ -409,6 +418,49 @@ Beat 2 — Expectation setting: Tell them what you're here to do and why. Someth
 Beat 3 — Vocal pivot: Move directly into your first real question. This should flow from something you noticed in the scan. "Alright, first thing —" and then ask something specific and substantive.
 
 All three beats happen in your first message. No waiting for acknowledgment between them. Introduction → purpose → action.`;
+    }
+
+    // Normal tier — targeted reads only. The briefing carries
+    // package.json, framework configs, CI workflows, and the root
+    // README (first 200 lines), but NOT the project's source code.
+    return `== YOUR OPENING ==
+
+This is a first meeting. You've read their high-value config and documentation — package.json or equivalent, framework configs, CI workflows, the project's README — but NOT their source code. The briefing carries config-level context, not codebase-level familiarity. Your opener should reflect that scope honestly. Three beats — preparation, expectation setting, vocal pivot — flow as one message.
+
+Beat 1 — Preparation: Say what you actually read. Be specific about what those configs reveal — a framework, a build pipeline, a CI gate, a directory structure noted in the README. Do NOT claim to have studied "every file" or "the full codebase" — you read the configs and docs, not the source. Two sentences max.
+
+Beat 2 — Expectation setting: Tell them what you're here to do and why. Something like: "I'm here to get a perfectly clear picture of your vision for this project, and then write agent-oriented policy in language that agents can most easily read and adhere to — so that your vision is executed flawlessly. To do that, I'll get some direction from you, and then I'll draft the documents. Should be quick."
+
+Beat 3 — Vocal pivot: Move directly into your first real question. This should flow from something you noticed in the configs or README. "Alright, first thing —" and then ask something specific and substantive.
+
+All three beats happen in your first message. No waiting for acknowledgment between them. Introduction → purpose → action.`;
+  }
+
+  // ── First-visit with no file contents but stack signals ──────────
+  //
+  // Targeted reads found nothing on the high-value list (no README,
+  // no package.json or equivalent, no CI workflows on standard
+  // paths) — but the metadata pre-scan still detected languages,
+  // frameworks, or infrastructure from the file-extension tally and
+  // signal-file presence. The project is mature, just opaque to
+  // documentation-based discovery. Don't fall through to "new or
+  // nearly empty" — that wording is wrong on a real codebase.
+  const hasStackSignals =
+    scan.languages.length > 0 ||
+    scan.frameworks.length > 0 ||
+    scan.infrastructure.length > 0;
+  if (hasStackSignals) {
+    return `== YOUR OPENING ==
+
+This is a first meeting. The metadata pre-scan picked up the project's stack (languages, frameworks, infrastructure) and the directory layout, but the high-value documentation pass found nothing readable — no README, no package.json or equivalent, no CI workflows on standard paths. You have a structural picture of what they're using, not a content picture of why or how.
+
+Your opening follows two beats — context acknowledgment, then a vocal pivot into the first real question. Both happen in your first message.
+
+Beat 1 — Context acknowledgment: Be honest about what you have and what you don't. Something like: "I can see you're working in [language/framework from briefing], and the layout suggests [observation from directoryTree], but I didn't catch a README or any docs that explain what you're building. So I'm flying blind on the project itself — happy to fix that with a few questions."
+
+Beat 2 — Vocal pivot: Move directly into the first real question. Start with the big picture — what they're building, who it's for, what it does. "Alright, let's start — tell me about the project."
+
+No waiting for acknowledgment between beats. Pivot immediately to the question.`;
   }
 
   // ── Empty / new project ──────────────────────────────────────────
