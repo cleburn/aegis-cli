@@ -186,6 +186,39 @@ export function acquireLock(projectRoot: string): string {
 }
 
 /**
+ * Cleanup callbacks registered by callers that want sync work to run
+ * on every exit path before the lock is released. Order is registration
+ * order. Used by initCommand to write the session transcript on the
+ * SIGINT path — without this, a Ctrl+C mid-session would skip
+ * initCommand's own finally block (the signal handler calls
+ * process.exit synchronously, never returning to the awaited code),
+ * and the audit record of the session would be lost.
+ *
+ * Module-scoped because a Ctrl+C can fire at any point during a CLI
+ * invocation and the signal handler in registerExitCleanup needs to
+ * reach the latest registered callback list. Callers append; nobody
+ * removes (a single CLI run is the lifetime).
+ */
+const cleanupCallbacks: Array<() => void> = [];
+
+/**
+ * Register a synchronous callback to run on every exit path BEFORE
+ * the lock is released. Errors thrown by callbacks are swallowed so
+ * they do not mask the original exit reason or strand the lock.
+ *
+ * Used by initCommand to persist the session transcript even when
+ * the SIGINT path bypasses initCommand's own finally block. Other
+ * callers may append additional cleanup work (e.g. flushing buffered
+ * stderr summaries) — callbacks fire in registration order and the
+ * lock release runs after all of them.
+ *
+ * Only safe for sync work: signal handlers cannot await microtasks.
+ */
+export function registerCleanupCallback(fn: () => void): void {
+  cleanupCallbacks.push(fn);
+}
+
+/**
  * Register a synchronous cleanup handler that removes the lock on
  * every exit path. Three gates:
  *
@@ -209,6 +242,19 @@ export function registerExitCleanup(lockPath: string): void {
   const cleanup = (): void => {
     if (done) return;
     done = true;
+    // Run registered cleanup callbacks BEFORE releasing the lock so
+    // they can rely on lock-held state (e.g. writing the transcript
+    // into .agentpolicy/sessions/, which the lock guarantees no
+    // concurrent aegis init is touching). Errors swallowed
+    // individually so one bad callback doesn't strand the lock or
+    // mask the others' work.
+    for (const cb of cleanupCallbacks) {
+      try {
+        cb();
+      } catch {
+        // Best-effort cleanup — keep going to the next callback.
+      }
+    }
     releaseLock(lockPath);
   };
 
@@ -227,11 +273,28 @@ export function registerExitCleanup(lockPath: string): void {
  * Release a previously acquired lock. Silent if the file is already
  * gone — callers run this from finally blocks where throwing would
  * mask the original error.
+ *
+ * After unlinking the lockfile, attempts to rmdir the parent
+ * .agentpolicy/ directory. rmdir is non-recursive: it succeeds only
+ * when the directory is truly empty. That converges the post-abort
+ * state — if acquireLock created .agentpolicy/ on a project that
+ * had none, and the run aborted before writePolicy landed any files,
+ * the now-empty directory disappears with the lock so the next
+ * `aegis init` greets the user as a first-meeting visitor instead
+ * of treating the leftover artifact as a return-visit baseline.
+ * When writePolicy did land files, rmdir fails with ENOTEMPTY and is
+ * silently ignored — the policy is preserved.
  */
 export function releaseLock(lockPath: string): void {
   try {
     fs.unlinkSync(lockPath);
   } catch {
     // Already removed or never created
+  }
+  try {
+    fs.rmdirSync(path.dirname(lockPath));
+  } catch {
+    // Directory has content (writePolicy completed, or user has
+    // pre-existing policy on disk) — leave it alone.
   }
 }

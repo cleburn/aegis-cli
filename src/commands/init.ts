@@ -29,10 +29,12 @@ import {
   acquireLock,
   releaseLock,
   registerExitCleanup,
+  registerCleanupCallback,
   LockConflictError,
 } from "../policy/lock.js";
 import { AegisExit } from "../abort.js";
 import { TerminalUI } from "../ui/terminal.js";
+import type { DiscoveryResult } from "../discovery/engine.js";
 
 // Read version from package.json so the banner stays in sync with publishes.
 function readVersion(): string {
@@ -52,15 +54,60 @@ export async function initCommand(): Promise<void> {
   const version = readVersion();
   const cwd = process.cwd();
 
+  // State referenced from the finally block AND from the SIGINT
+  // cleanup callback registered with lock.ts. Both paths converge on
+  // writeFinalTranscript via a once-guard so the audit record is
+  // preserved exactly once regardless of which exit path fires.
+  let lockPath: string | null = null;
+  let engine: DiscoveryEngine | null = null;
+  let result: DiscoveryResult | null = null;
+  let fileOutcomes: WriteOutcome[] = [];
+  let extractionFailed = false;
+  let transcriptWritten = false;
+
+  // Persist the session transcript wherever we are when this fires.
+  // Callable from three points:
+  //   1. The end of the success path (now triggered via finally).
+  //   2. The SIGINT / SIGTERM / 'exit' cleanup chain in lock.ts,
+  //      which would otherwise bypass initCommand's own finally
+  //      (the signal handler calls process.exit synchronously, so
+  //      the awaited code never resumes).
+  //   3. Any caught exception path that flows through finally.
+  // First call wins; later calls no-op via the once-guard. That
+  // means a Ctrl+C mid-conversation captures the partial transcript
+  // before initCommand's finally block has any chance to run, and
+  // a normal completion captures the full transcript through the
+  // finally path while the cleanup callback later no-ops.
+  const writeFinalTranscript = (): void => {
+    if (transcriptWritten || !engine) return;
+    transcriptWritten = true;
+    try {
+      const entries = buildTranscriptEntries(engine, result, fileOutcomes);
+      const transcriptPath = writeTranscript(cwd, entries);
+      try {
+        ui.showNote(`Session transcript saved: ${transcriptPath}`);
+      } catch {
+        // UI may already be torn down (signal-handler path) — the
+        // file write itself is the load-bearing part.
+      }
+    } catch {
+      // Best-effort. A failed transcript write must not strand the
+      // lock or mask the original exit reason; downstream forensic
+      // passes lose this session but the next run still works.
+    }
+  };
+
   // Acquire the per-project lock before any interactive work, so a
   // user who fires a second aegis init in the same repo sees a clear
   // conflict message rather than two scans clobbering each other.
   // Register the exit-cleanup hook immediately so a deep process.exit
-  // from another module cannot strand the lock on disk.
-  let lockPath: string | null = null;
+  // from another module cannot strand the lock on disk. The
+  // transcript cleanup is registered AFTER the engine is constructed
+  // (writeFinalTranscript no-ops on engine === null until then).
   try {
     lockPath = acquireLock(cwd);
     registerExitCleanup(lockPath);
+    registerCleanupCallback(writeFinalTranscript);
   } catch (err) {
     if (err instanceof LockConflictError) {
       throw new AegisExit(1, err.message);
@@ -104,9 +151,9 @@ export async function initCommand(): Promise<void> {
     }
 
     // Run the conversation — this is the whole thing
-    const engine = new DiscoveryEngine(provider, scan, ui);
+    engine = new DiscoveryEngine(provider, scan, ui);
 
-    const result = await engine.run();
+    result = await engine.run();
 
     // Branch on how discovery concluded:
     //
@@ -121,9 +168,6 @@ export async function initCommand(): Promise<void> {
     //   and the user would get a session that lies about what
     //   happened. Surface the error and fall through to transcript
     //   write + non-zero exit.
-    let fileOutcomes: WriteOutcome[] = [];
-    let extractionFailed = false;
-
     if (result.status === "completed" && result.policy) {
       fileOutcomes = writePolicy(cwd, result.policy);
 
@@ -158,54 +202,6 @@ export async function initCommand(): Promise<void> {
         "Session transcript will still be saved for reference. Run aegis init again when you're ready to retry."
       );
     }
-
-    // ── Final transcript write ──────────────────────────────────────
-    //
-    // One file per session, written at session end so it captures
-    // the full conversation including post-completion turns.
-    const finalTranscript = engine.getTranscript();
-    const transcriptEntries: Array<{ role: string; content: string }> = [
-      ...finalTranscript,
-    ];
-
-    if (result.policy) {
-      transcriptEntries.push({
-        role: "system",
-        content: JSON.stringify({
-          type: "session_closing",
-          files: fileOutcomes,
-          // Use the project-relative path so the absolute filesystem
-          // location — which embeds the user's home directory — never
-          // lands in the transcript (which gets re-read into the
-          // discovery prompt on return visits).
-          policy_path: ".agentpolicy/",
-          handoff_prompt: result.policy.handoff_prompt,
-          deployment_intent: result.policy.deployment_intent,
-          mcp_install: "npm install -g aegis-mcp-server",
-          future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
-        }, null, 2),
-      });
-    } else if (result.extractionFailure) {
-      // Failed-extraction sessions get a parallel closing entry so
-      // the saved transcript carries the specific failure category
-      // and detail. Without this, the next forensic pass would have
-      // to reproduce the failure to learn what went wrong — and the
-      // failure is by definition non-deterministic in some cases
-      // (transport errors, model output drift). Capturing it here
-      // makes "what failed" answerable from the transcript alone.
-      // Mutually exclusive with the result.policy branch above:
-      // extractionFailure is only populated when policy is null.
-      transcriptEntries.push({
-        role: "system",
-        content: JSON.stringify({
-          type: "session_closing",
-          extraction_failure: result.extractionFailure,
-        }, null, 2),
-      });
-    }
-
-    const transcriptPath = writeTranscript(cwd, transcriptEntries);
-    ui.showNote(`Session transcript saved: ${transcriptPath}`);
 
     // Extraction failure surfaces as a non-zero exit after the
     // transcript is preserved, so shell callers (CI, scripts, the
@@ -256,13 +252,111 @@ export async function initCommand(): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    // Release the lock synchronously first so it happens even if
-    // ui.destroy() is cut short. Node exits with process.exitCode
-    // after the event loop drains; Ink's waitUntilExit hook in
-    // terminal.tsx respects process.exitCode rather than hardcoding 0.
+    // Persist the transcript FIRST so an exception during writePolicy,
+    // a Ctrl+C during the post-completion loop, or any caught error
+    // above does not lose the audit record. The cleanup callback
+    // registered with lock.ts will fire on the SIGINT / SIGTERM /
+    // 'exit' paths that bypass this finally block; the once-guard
+    // makes the second call a no-op so the transcript is written
+    // exactly once. Lock release happens AFTER the transcript write
+    // so the rmdir-on-release of .agentpolicy/ correctly fails with
+    // ENOTEMPTY (sessions/ now holds the new transcript) and leaves
+    // the directory in place.
+    writeFinalTranscript();
     if (lockPath) releaseLock(lockPath);
     await ui.destroy();
   }
+}
+
+/**
+ * Build the array of transcript entries to persist for the session.
+ * The base is the engine's live conversation (every user/assistant
+ * turn captured during discovery and post-completion). On top of
+ * that, append a closing-system entry whose shape reflects how the
+ * session actually ended — successful policy write, no-change
+ * confirmation, extraction failure, or incomplete (the engine never
+ * reached a terminal status, typically a Ctrl+C or an exception
+ * during discovery).
+ *
+ * The closing entry exists so a forensic pass can read a transcript
+ * standalone and tell what happened without re-running the session.
+ * For successful sessions it carries the handoff prompt and
+ * deployment_intent the writer used; for failures it carries the
+ * specific failure category; for incomplete sessions it just marks
+ * that the session did not conclude normally — the conversation
+ * itself is the record.
+ */
+function buildTranscriptEntries(
+  engine: DiscoveryEngine,
+  result: DiscoveryResult | null,
+  fileOutcomes: WriteOutcome[]
+): Array<{ role: string; content: string }> {
+  const entries: Array<{ role: string; content: string }> = [
+    ...engine.getTranscript(),
+  ];
+
+  if (result?.policy) {
+    entries.push({
+      role: "system",
+      content: JSON.stringify({
+        type: "session_closing",
+        files: fileOutcomes,
+        // Use the project-relative path so the absolute filesystem
+        // location — which embeds the user's home directory — never
+        // lands in the transcript (which gets re-read into the
+        // discovery prompt on return visits).
+        policy_path: ".agentpolicy/",
+        handoff_prompt: result.policy.handoff_prompt,
+        deployment_intent: result.policy.deployment_intent,
+        mcp_install: "npm install -g aegis-mcp-server",
+        future_session_prompt: "Call aegis_policy_summary now. This is your governance contract — it defines your role, your boundaries, and which tools to use. Do not take any action until you have called this tool and received confirmation from the user to proceed.",
+      }, null, 2),
+    });
+  } else if (result?.extractionFailure) {
+    // Failed-extraction sessions get a parallel closing entry so
+    // the saved transcript carries the specific failure category
+    // and detail. Without this, the next forensic pass would have
+    // to reproduce the failure to learn what went wrong — and the
+    // failure is by definition non-deterministic in some cases
+    // (transport errors, model output drift). Capturing it here
+    // makes "what failed" answerable from the transcript alone.
+    // Mutually exclusive with the result.policy branch above:
+    // extractionFailure is only populated when policy is null.
+    entries.push({
+      role: "system",
+      content: JSON.stringify({
+        type: "session_closing",
+        extraction_failure: result.extractionFailure,
+      }, null, 2),
+    });
+  } else if (result?.status === "no_changes") {
+    // No-change sessions wrote no policy; the closing entry just
+    // notes the outcome so a forensic pass can distinguish a
+    // legitimate no-change conclusion from an incomplete session.
+    entries.push({
+      role: "system",
+      content: JSON.stringify({
+        type: "session_closing",
+        outcome: "no_changes",
+      }, null, 2),
+    });
+  } else {
+    // Engine never reached a terminal status — Ctrl+C
+    // mid-conversation, exception during discovery or
+    // post-completion, error before result was assigned. The
+    // transcript itself is the audit record; the closing entry
+    // marks "did not conclude normally" so future inspection
+    // doesn't mistake an aborted session for a missing closing.
+    entries.push({
+      role: "system",
+      content: JSON.stringify({
+        type: "session_closing",
+        outcome: "incomplete",
+      }, null, 2),
+    });
+  }
+
+  return entries;
 }
 
 /**
