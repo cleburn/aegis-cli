@@ -195,8 +195,8 @@ When NOT to use this: don't read files you already have in your scan briefing (y
 Safety rules the system enforces on your behalf:
 - Reads are confined to the project root. Paths outside the project are rejected.
 - Sensitive files (env files, keys, credentials, secrets) are refused — same filter as your initial scan.
-- Files larger than 10KB are truncated.
-- If a read fails (file missing, path rejected, sensitive), you'll receive an error note. Relay it to the human gracefully and ask how they'd like to proceed.
+- Files larger than 1MB are refused outright; smaller files come through whole. The 10KB scan-time cap does NOT apply here — user-initiated [READ_FILE] reads opt out of the scan-budget rationing on the assumption that the human asked for a specific file and expects its full contents.
+- If a read fails (file missing, path rejected, sensitive, oversize), you'll receive an error note. Relay it to the human gracefully and ask how they'd like to proceed.
 
 Format is strict: [READ_FILE: path/to/file.md] — no quotes around the path, no extra whitespace inside the brackets beyond the one space after the colon. Put the marker at the end of your message. You may include a brief lead-in like "Let me pull that up real quick." before the marker, but keep it short — the user sees a "Reading ..." note the moment the read starts.
 
@@ -655,7 +655,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 == CONSTITUTION SKELETON ==
 
 {
-  "$schema": "https://aegis.dev/schema/constitution.v0.1.0.json",
+  "$schema": "https://aegis.dev/schema/constitution.schema.json",
   "version": "0.3.0",
   "project": {
     "name": "string (required)",
@@ -682,7 +682,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 == GOVERNANCE SKELETON ==
 
 {
-  "$schema": "https://aegis.dev/schema/governance.v0.1.0.json",
+  "$schema": "https://aegis.dev/schema/governance.schema.json",
   "version": "0.3.0",
   "autonomy": {
     "default_level": "conservative|advisory|delegated (required)",
@@ -731,7 +731,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 == ROLE SKELETON ==
 
 {
-  "$schema": "https://aegis.dev/schema/role.v0.1.0.json",
+  "$schema": "https://aegis.dev/schema/role.schema.json",
   "version": "0.3.0",
   "role": {
     "name": "string (required)",
@@ -747,7 +747,7 @@ The Aegis spec defines required skeleton fields that every tool in the ecosystem
 == LEDGER SKELETON ==
 
 {
-  "$schema": "https://aegis.dev/schema/ledger.v0.1.0.json",
+  "$schema": "https://aegis.dev/schema/ledger.schema.json",
   "version": "0.3.0",
   "sequence": 0,
   "tasks": [],
