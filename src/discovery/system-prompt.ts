@@ -23,7 +23,7 @@
  */
 
 import type { ScanResult } from "./scanner.js";
-import { formatScanBriefing } from "./scanner.js";
+import { formatScanBriefing, repoHasRealSource } from "./scanner.js";
 
 /**
  * Discovery targets — the specific things Aegis must extract.
@@ -436,27 +436,31 @@ Beat 3 — Vocal pivot: Move directly into your first real question. This should
 All three beats happen in your first message. No waiting for acknowledgment between them. Introduction → purpose → action.`;
   }
 
-  // ── First-visit with no file contents but stack signals ──────────
+  // ── First-visit with no file contents but real source detected ──
   //
   // Targeted reads found nothing on the high-value list (no README,
   // no package.json or equivalent, no CI workflows on standard
-  // paths) — but the metadata pre-scan still detected languages,
-  // frameworks, or infrastructure from the file-extension tally and
-  // signal-file presence. The project is mature, just opaque to
-  // documentation-based discovery. Don't fall through to "new or
-  // nearly empty" — that wording is wrong on a real codebase.
-  const hasStackSignals =
-    scan.languages.length > 0 ||
-    scan.frameworks.length > 0 ||
-    scan.infrastructure.length > 0;
-  if (hasStackSignals) {
+  // paths). But the project still has actual code on disk —
+  // repoHasRealSource fires on EITHER config-driven detection
+  // (languages from tsconfig/pyproject/Cargo.toml/etc., frameworks
+  // from package.json deps, infrastructure from Dockerfile/CI/etc.)
+  // OR the raw file-extension tally (.py / .ts / .rs / .go and the
+  // rest of SOURCE_FILE_EXTENSIONS). That second branch is the
+  // important one: a config-light source-only repo (just .py files,
+  // no pyproject.toml) registers no language signal but is plainly
+  // not "new or nearly empty" — falling through to the empty-opener
+  // would mis-greet the user. repoHasRealSource is already used by
+  // engine.ts:794-801 for the same maturity question on
+  // deployment_intent fallback; using it here keeps the maturity
+  // definition consistent.
+  if (repoHasRealSource(scan)) {
     return `== YOUR OPENING ==
 
-This is a first meeting. The metadata pre-scan picked up the project's stack (languages, frameworks, infrastructure) and the directory layout, but the high-value documentation pass found nothing readable — no README, no package.json or equivalent, no CI workflows on standard paths. You have a structural picture of what they're using, not a content picture of why or how.
+This is a first meeting. The metadata pre-scan can tell this is a real codebase — source files on disk, possibly a recognized stack — but the high-value documentation pass found nothing readable: no README, no package.json or equivalent, no CI workflows on standard paths. You have a structural picture of what's there, not a content picture of why or how.
 
 Your opening follows two beats — context acknowledgment, then a vocal pivot into the first real question. Both happen in your first message.
 
-Beat 1 — Context acknowledgment: Be honest about what you have and what you don't. Something like: "I can see you're working in [language/framework from briefing], and the layout suggests [observation from directoryTree], but I didn't catch a README or any docs that explain what you're building. So I'm flying blind on the project itself — happy to fix that with a few questions."
+Beat 1 — Context acknowledgment: Be honest about what you have and what you don't. Pick a real signal from the briefing — a language detection, a directory name, a file-extension count — and use it. Something like: "I can see you've got [signal from briefing], and the layout suggests [observation from directoryTree], but I didn't catch a README or any docs that explain what you're building. So I'm flying blind on the project itself — happy to fix that with a few questions."
 
 Beat 2 — Vocal pivot: Move directly into the first real question. Start with the big picture — what they're building, who it's for, what it does. "Alright, let's start — tell me about the project."
 
