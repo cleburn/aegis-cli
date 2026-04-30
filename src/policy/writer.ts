@@ -109,26 +109,53 @@ const MCP_CONFIG = {
 };
 
 /**
- * True when an existing entry under .mcp.json's mcpServers.aegis is
- * a usable aegis-mcp connection. The minimum requirement is that
- * `command` equals "aegis-mcp" so the runtime invokes the right
- * binary. Args are not validated — users may legitimately customize
- * them (e.g. `--project` pointing at a sub-project), and the merge
- * path's job is to preserve that customization rather than enforce
- * a canonical shape. Other fields beyond command/args (type, env,
- * future MCP-spec additions) are tolerated.
+ * Classify an existing entry under .mcp.json's mcpServers.aegis.
+ * Three outcomes that downstream code branches on for both
+ * write-side behavior and user-facing message wording:
  *
- * Returns false for null, primitives, arrays, plain objects with a
- * missing or non-matching command field. Those cases route through
- * the skipped path so the user can fix the entry without having
- * their value silently overwritten.
+ *   - "usable" — plain object with command === "aegis-mcp". The
+ *     canonical shape; preserve any user customization to args
+ *     and other fields. Maps to status: unchanged.
+ *
+ *   - "non-canonical-command" — plain object with a string command
+ *     field that isn't "aegis-mcp". May still be a working setup
+ *     (e.g. absolute path "/usr/local/bin/aegis-mcp", or a wrapper
+ *     that ultimately launches aegis-mcp). The user knows whether
+ *     their setup works; we refuse to clobber and tell them they
+ *     can keep their custom command or replace with the standard.
+ *     Maps to status: skipped with the soft "if your setup works"
+ *     reason.
+ *
+ *   - "malformed" — null, primitives, arrays, objects without a
+ *     command field, objects with a non-string command. Cannot be
+ *     a working MCP server config under any reading of the spec.
+ *     Maps to status: skipped with a hard "is malformed" reason.
+ *     Still no clobber — the user authored that value, even if it
+ *     was a typo, and we surface the problem rather than silently
+ *     destroying it.
+ *
+ * Args are not validated for the usable case — users may legitimately
+ * customize them (e.g. --project pointing at a sub-project). Other
+ * fields beyond command/args (type, env, future MCP-spec additions)
+ * are tolerated.
  */
-function isUsableAegisEntry(entry: unknown): boolean {
+type AegisEntryStatus =
+  | "usable"
+  | "non-canonical-command"
+  | "malformed";
+
+function classifyAegisEntry(entry: unknown): AegisEntryStatus {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
+    return "malformed";
   }
   const e = entry as { command?: unknown };
-  return e.command === "aegis-mcp";
+  if (typeof e.command !== "string") {
+    return "malformed";
+  }
+  if (e.command === "aegis-mcp") {
+    return "usable";
+  }
+  return "non-canonical-command";
 }
 
 /**
@@ -333,43 +360,33 @@ export function writePolicy(
     } else {
       const servers = existing.mcpServers as Record<string, unknown>;
       if (mcpServerKey in servers) {
-        // Aegis key exists. Two sub-cases:
-        //   (a) Usable entry — leave alone, preserve any user
-        //       customization to args.
-        //   (b) Unusable entry — null, wrong command, malformed,
-        //       missing the command field. Refuse to clobber for
-        //       the same reason as the unexpected-shape branch
-        //       above: silently overwriting a user-authored value
-        //       is destructive. Surface as skipped with a reason
-        //       naming the validation gap; the user fixes the
-        //       entry or removes it and re-runs init.
-        //
-        // "Usable" means command field equals "aegis-mcp" — that's
-        // the bin name the runtime needs to invoke. Args are not
-        // validated because users may legitimately customize them
-        // (e.g. --project to point at a sub-project). Other fields
-        // beyond command/args (type, env, etc. — future MCP spec
-        // additions) are tolerated.
-        if (isUsableAegisEntry(servers[mcpServerKey])) {
+        // Aegis key exists. Three sub-cases via classifyAegisEntry:
+        //   (a) "usable" — canonical shape with command "aegis-mcp".
+        //       Leave alone, preserve user customization to args.
+        //   (b) "non-canonical-command" — plain object, string
+        //       command, but not the canonical "aegis-mcp" value.
+        //       May be a working custom install (absolute path,
+        //       wrapper script). User knows whether it works;
+        //       refuse to clobber, surface with soft framing.
+        //   (c) "malformed" — null, primitives, arrays, objects
+        //       without a string command field. Cannot plausibly
+        //       work as an MCP entry. Refuse to clobber (the user
+        //       authored that value, possibly via typo), surface
+        //       with hard framing pointing at replacement.
+        const entryStatus = classifyAegisEntry(servers[mcpServerKey]);
+        if (entryStatus === "usable") {
           outcomes.push({ path: ".mcp.json", status: "unchanged" });
-        } else {
-          // The validation here is intentionally strict on the
-          // canonical "aegis-mcp" command name — that's the value
-          // Aegis writes and the most common runtime invocation.
-          // Custom installs that work fine (an absolute path like
-          // /usr/local/bin/aegis-mcp, or a wrapper that ultimately
-          // launches aegis-mcp) will not match the check and fall
-          // through here. The reason text acknowledges that
-          // ambiguity rather than declaring the existing entry
-          // broken — the user knows whether their setup works.
-          // We still take the safe skipped path either way (no
-          // clobber), so a working custom setup is preserved on
-          // disk; the closing UX shows the standard entry as a
-          // reference if the user wants to replace.
+        } else if (entryStatus === "non-canonical-command") {
           outcomes.push({
             path: ".mcp.json",
             status: "skipped",
             reason: `the existing "aegis" entry under mcpServers has a non-standard command field — if your setup works, keep it; otherwise replace with the standard entry`,
+          });
+        } else {
+          outcomes.push({
+            path: ".mcp.json",
+            status: "skipped",
+            reason: `the existing "aegis" entry under mcpServers is malformed (must be an object with a string command field) — replace it with the standard entry`,
           });
         }
       } else {
