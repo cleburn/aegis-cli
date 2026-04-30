@@ -153,12 +153,17 @@ export async function initCommand(): Promise<void> {
 
     // Validate API key quietly. The provider distinguishes auth
     // failure (the API rejected the key) from transport failure
-    // (network unreachable, 5xx, rate limit, timeout) so the
-    // user-facing error names the actual cause: a rejected key
-    // sends them back to re-enter, a transport failure tells them
-    // it's likely not their key. The previous code conflated the
-    // two and always blamed the key, which was wrong about half
-    // the time.
+    // (anything else — connectivity, rate limit, 5xx, timeout)
+    // so the user-facing error names the actual cause: a rejected
+    // key sends them back to re-enter, a transport failure tells
+    // them their key isn't the problem and the request just
+    // didn't complete. The transport bucket is intentionally
+    // broad — a finer split (network vs rate-limit vs server)
+    // would let us suggest a more specific action, but the
+    // SDK's error detail already carries that signal in the
+    // detail field, and over-claiming a single cause (e.g.
+    // "network issue") is worse UX than leaving the cause
+    // visible in the detail and letting the user interpret it.
     const validation = await provider.validate();
     if (!validation.ok) {
       if (validation.reason === "auth") {
@@ -169,9 +174,9 @@ export async function initCommand(): Promise<void> {
       }
       throw new AegisExit(
         1,
-        `Couldn't reach the Anthropic API to verify your key${
-          validation.detail ? ` (${validation.detail})` : ""
-        }. This is likely a network issue, not your key — try again in a minute.`
+        `Couldn't verify your API key with Anthropic${
+          validation.detail ? ` — ${validation.detail}` : ""
+        }. Your key isn't being rejected; the request just didn't complete. Try again in a moment.`
       );
     }
 
