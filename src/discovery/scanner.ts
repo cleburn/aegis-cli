@@ -671,15 +671,28 @@ export function validateAndNormalizeTranscript(raw: string): string | null {
 
 /**
  * Check if a relative file path matches sensitive patterns.
+ *
+ * Patterns in SENSITIVE_FILE_PATTERNS are slash-anchored (e.g.
+ * /^secrets?\//, /^\.docker\/config\.json$/, /^private\//) so they
+ * can match either a basename or a path prefix. On Windows, the
+ * caller may pass a path with backslash separators (e.g.
+ * "secrets\\foo.txt", ".docker\\config.json"), which would silently
+ * miss those slash-anchored patterns. Normalize OS-native separators
+ * to forward slashes before testing, and use path.posix.basename so
+ * the basename split also operates on the forward-slash form
+ * regardless of OS — path.basename uses the platform separator and
+ * would mis-split a forward-slash-normalized path on Windows.
  */
 export function isSensitiveFile(relativePath: string): boolean {
+  const normalized = relativePath.split(path.sep).join("/");
+  const basename = path.posix.basename(normalized);
+
   // Safe .env variants are explicitly allowed
-  const basename = path.basename(relativePath);
   if (SAFE_ENV_PATTERNS.some((p) => p.test(basename))) return false;
 
   // Check against sensitive patterns (test both full relative path and basename)
   return SENSITIVE_FILE_PATTERNS.some(
-    (p) => p.test(relativePath) || p.test(basename)
+    (p) => p.test(normalized) || p.test(basename)
   );
 }
 
