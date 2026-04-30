@@ -48,10 +48,27 @@ export interface LLMProvider {
   readonly name: string;
 
   /**
-   * Verify the API key works.
+   * Verify the API key works. Returns a typed result so the caller
+   * can surface the actual failure mode — a rejected key
+   * ("auth") and a network or 5xx failure ("transport") both
+   * cause validate() to fail, but they call for different
+   * user-facing messages: re-enter the key vs check connectivity
+   * and retry. A boolean return would conflate the two and
+   * default to blaming the key, which is wrong about half the
+   * time and lands the user retyping a perfectly good API key
+   * they had.
    */
-  validate(): Promise<boolean>;
+  validate(): Promise<ProviderValidateResult>;
 }
+
+/**
+ * Outcome of provider.validate(). Success is the simple shape; a
+ * failure carries a discriminated reason so callers branch their
+ * user-facing error messages on the actual cause.
+ */
+export type ProviderValidateResult =
+  | { ok: true }
+  | { ok: false; reason: "auth" | "transport"; detail?: string };
 
 /**
  * Thrown by providers when the model's response stops because the

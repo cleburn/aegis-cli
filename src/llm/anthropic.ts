@@ -1,5 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { LLMProvider, Message } from "./provider.js";
+import type {
+  LLMProvider,
+  Message,
+  ProviderValidateResult,
+} from "./provider.js";
 import { MaxTokensError } from "./provider.js";
 
 const MODEL = "claude-opus-4-7";
@@ -148,16 +152,34 @@ export class AnthropicProvider implements LLMProvider {
     return parseJSONResponse<T>(raw);
   }
 
-  async validate(): Promise<boolean> {
+  async validate(): Promise<ProviderValidateResult> {
     try {
       await this.client.messages.create({
         model: MODEL,
         max_tokens: 10,
         messages: [{ role: "user", content: "ping" }],
       });
-      return true;
-    } catch {
-      return false;
+      return { ok: true };
+    } catch (err) {
+      // Anthropic SDK errors carry an HTTP status field. 401/403
+      // mean the API rejected the key (auth failure); anything
+      // else (network unreachable, DNS failure, 429 rate limit,
+      // 5xx server error, request timeout) is transport — the
+      // user's key is fine, the call just couldn't complete. The
+      // previous code returned a bare false either way, which led
+      // init.ts to tell the user "Couldn't connect with that API
+      // key" — sending users with valid keys but flaky internet to
+      // retype a key that wasn't the problem. Discriminating here
+      // lets the caller surface the actual cause.
+      if (err && typeof err === "object" && "status" in err) {
+        const status = (err as { status?: number }).status;
+        if (status === 401 || status === 403) {
+          return { ok: false, reason: "auth" };
+        }
+      }
+      const detail =
+        err instanceof Error ? err.message.slice(0, 200) : "unknown error";
+      return { ok: false, reason: "transport", detail };
     }
   }
 }

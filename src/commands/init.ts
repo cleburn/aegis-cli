@@ -151,12 +151,27 @@ export async function initCommand(): Promise<void> {
     const apiKey = await resolveApiKey();
     const provider = new AnthropicProvider(apiKey);
 
-    // Validate API key quietly
-    const valid = await provider.validate();
-    if (!valid) {
+    // Validate API key quietly. The provider distinguishes auth
+    // failure (the API rejected the key) from transport failure
+    // (network unreachable, 5xx, rate limit, timeout) so the
+    // user-facing error names the actual cause: a rejected key
+    // sends them back to re-enter, a transport failure tells them
+    // it's likely not their key. The previous code conflated the
+    // two and always blamed the key, which was wrong about half
+    // the time.
+    const validation = await provider.validate();
+    if (!validation.ok) {
+      if (validation.reason === "auth") {
+        throw new AegisExit(
+          1,
+          "Anthropic rejected that API key as invalid. Check that you copied it correctly and try again."
+        );
+      }
       throw new AegisExit(
         1,
-        "Couldn't connect with that API key. Check that it's valid and try again."
+        `Couldn't reach the Anthropic API to verify your key${
+          validation.detail ? ` (${validation.detail})` : ""
+        }. This is likely a network issue, not your key — try again in a minute.`
       );
     }
 
