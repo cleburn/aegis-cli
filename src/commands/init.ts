@@ -36,17 +36,30 @@ import { AegisExit } from "../abort.js";
 import { TerminalUI } from "../ui/terminal.js";
 import type { DiscoveryResult } from "../discovery/engine.js";
 
-// Read version from package.json so the banner stays in sync with publishes.
+// Read version from package.json so the banner stays in sync with
+// publishes. In production (`aegis` from a global install) this
+// file is at `<install>/dist/src/commands/init.js`, three levels up
+// from package.json. In dev (`tsx bin/aegis.ts` exercising the
+// uncompiled source) it's at `<repo>/src/commands/init.ts`, two
+// levels up. Try the production path first, then fall back to the
+// dev path. A read failure here is non-fatal — the banner shows
+// "unknown" rather than blocking init — so any I/O or parse error
+// is silently swallowed.
 function readVersion(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    // dist/src/commands/init.js → walk up to package.json
-    const pkgPath = join(here, "..", "..", "..", "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-    return pkg.version ?? "unknown";
-  } catch {
-    return "unknown";
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(here, "..", "..", "..", "package.json"),
+    join(here, "..", "..", "package.json"),
+  ];
+  for (const pkgPath of candidates) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      if (pkg && typeof pkg.version === "string") return pkg.version;
+    } catch {
+      // Try next candidate
+    }
   }
+  return "unknown";
 }
 
 export async function initCommand(): Promise<void> {

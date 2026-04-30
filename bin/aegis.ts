@@ -19,7 +19,33 @@ import { validateCommand } from "../src/commands/validate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf-8"));
+
+// In production (`aegis` from a global install), this file is at
+// `<install>/dist/bin/aegis.js` and package.json is two levels up.
+// In dev (`npm run dev` → `tsx bin/aegis.ts`), the file is at
+// `<repo>/bin/aegis.ts` and package.json is one level up. Try the
+// production path first (the common case), then fall back to the
+// dev path. A failure here is fatal — package.json is needed for
+// the version banner and the update check — so let it throw with
+// a clear message rather than silently degrade.
+function readPackageJson(): { name: string; version: string } {
+  const candidates = ["../../package.json", "../package.json"];
+  let lastError: unknown;
+  for (const rel of candidates) {
+    try {
+      return JSON.parse(readFileSync(join(__dirname, rel), "utf-8"));
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  const detail =
+    lastError instanceof Error ? lastError.message : "unknown error";
+  throw new Error(
+    `Could not locate package.json from ${__dirname} (tried ${candidates.join(", ")}): ${detail}`
+  );
+}
+
+const pkg = readPackageJson();
 
 // ─── Update Checker ────────────────────────────────────────────────
 // Non-blocking check against the npm registry. If a newer version
