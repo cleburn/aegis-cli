@@ -52,3 +52,31 @@ export interface LLMProvider {
    */
   validate(): Promise<boolean>;
 }
+
+/**
+ * Thrown by providers when the model's response stops because the
+ * max_tokens budget was exhausted before generation completed. Used
+ * by the JSON-output path (chatJSON) where a truncated payload is a
+ * structurally distinct failure from "the model emitted bad JSON" —
+ * the model didn't emit anything wrong, it just ran out of room. The
+ * conversation path (chatStream) handles truncation differently: it
+ * streams a visible note to the user instead of throwing, because
+ * cutting off the live conversation with an exception is worse UX
+ * than acknowledging the cut-off and continuing.
+ *
+ * Defined in the interface module rather than per-provider so future
+ * provider implementations (OpenAI, Gemini, DeepSeek, etc.) throw
+ * the same exception type and engine.ts catches it once.
+ */
+export class MaxTokensError extends Error {
+  readonly operation: "chat" | "json";
+  constructor(operation: "chat" | "json") {
+    super(
+      `Model response truncated at max_tokens before completing the ${
+        operation === "json" ? "JSON output" : "response"
+      }.`
+    );
+    this.name = "MaxTokensError";
+    this.operation = operation;
+  }
+}

@@ -12,6 +12,7 @@
 
 import * as path from "node:path";
 import type { LLMProvider, Message } from "../llm/provider.js";
+import { MaxTokensError } from "../llm/provider.js";
 import type { ScanResult } from "./scanner.js";
 import {
   isSensitiveFile,
@@ -42,9 +43,14 @@ const MAX_READ_DEPTH = 5;
  *
  * Categories mirror the failure branches in extractPolicy():
  * - "parse": JSON.parse threw a SyntaxError on the model's output.
- * - "transport": chatJSON threw a non-SyntaxError (network, auth,
- *   rate limit, timeout, anything provider-side). The model's output
- *   never reached the parser.
+ * - "transport": chatJSON threw a non-SyntaxError, non-MaxTokensError
+ *   (network, auth, rate limit, timeout, anything provider-side).
+ *   The model's output never reached the parser.
+ * - "max_tokens": the provider stopped emitting tokens because the
+ *   max_tokens budget was exhausted before the JSON output completed.
+ *   Distinct from "parse" — the model didn't emit bad output, it ran
+ *   out of room. Captured separately so forensic passes can tell
+ *   "model truncated" from "model output malformed."
  * - "structural": the parsed object was missing one or more of the
  *   required top-level keys (constitution, governance, roles,
  *   ledger).
@@ -58,7 +64,12 @@ const MAX_READ_DEPTH = 5;
  * emits a runaway error.
  */
 export interface ExtractionFailure {
-  category: "parse" | "transport" | "structural" | "schema";
+  category:
+    | "parse"
+    | "transport"
+    | "max_tokens"
+    | "structural"
+    | "schema";
   detail: string;
 }
 
@@ -836,20 +847,37 @@ export class DiscoveryEngine {
           error instanceof Error
             ? error.message.slice(0, 200)
             : "unknown error";
-        // SyntaxError comes from JSON.parse via parseJSONResponse
-        // (anthropic.ts:127) — the model emitted invalid JSON.
-        // Anything else from chatJSON is a transport-layer error
-        // (network, auth, rate limit, timeout) which is not the
-        // model's fault; the retry hint and forensic record should
-        // not accuse it of bad output. The chatJSON system prompt
-        // already covers the "valid JSON only" rule
-        // (anthropic.ts:75), so the hint just names the parse
-        // defect concretely instead of re-teaching the rule.
-        const isParseFailure = error instanceof SyntaxError;
+
+        // Three failure shapes the catch can see, each with a
+        // distinct retry hint and forensic category:
+        //
+        //   - MaxTokensError: provider stopped emitting because
+        //     max_tokens was hit before completing the JSON. The
+        //     model didn't emit anything wrong — it ran out of
+        //     room. Retry with a hint explicitly naming truncation
+        //     so the next attempt knows to budget output more
+        //     carefully (e.g. by tightening preserved-verbatim
+        //     content where the conversation allows).
+        //   - SyntaxError: JSON.parse failed on the model's output.
+        //     The model emitted invalid JSON — surface that
+        //     concretely instead of conflating with transport.
+        //   - Anything else: provider-side error (network, auth,
+        //     rate limit, timeout). Not the model's fault; the
+        //     retry hint should not accuse it of bad output.
+        const isMaxTokensFailure = error instanceof MaxTokensError;
+        const isParseFailure =
+          !isMaxTokensFailure && error instanceof SyntaxError;
+        const category: ExtractionFailure["category"] = isMaxTokensFailure
+          ? "max_tokens"
+          : isParseFailure
+            ? "parse"
+            : "transport";
 
         if (attempt < MAX_ATTEMPTS) {
           this.ui.showNote("Extraction hit a snag — retrying...");
-          if (isParseFailure) {
+          if (isMaxTokensFailure) {
+            lastFailure = `the previous attempt was cut off at max_tokens before completing the JSON output. Tighten any verbatim-preserved sections that aren't strictly needed and emit the policy more compactly.`;
+          } else if (isParseFailure) {
             lastFailure = `the previous attempt returned text that could not be parsed as JSON (${detail}).`;
           } else {
             lastFailure = `the previous attempt failed before producing usable output (${detail}). Try again.`;
@@ -863,7 +891,7 @@ export class DiscoveryEngine {
         return {
           policy: null,
           failure: {
-            category: isParseFailure ? "parse" : "transport",
+            category,
             detail,
           },
         };

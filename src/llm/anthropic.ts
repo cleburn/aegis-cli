@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { LLMProvider, Message } from "./provider.js";
+import { MaxTokensError } from "./provider.js";
 
 const MODEL = "claude-opus-4-7";
 const MAX_TOKENS = 16384;
@@ -115,6 +116,7 @@ export class AnthropicProvider implements LLMProvider {
     });
 
     let raw = "";
+    let stopReason: string | null = null;
 
     for await (const event of stream) {
       if (
@@ -122,7 +124,25 @@ export class AnthropicProvider implements LLMProvider {
         event.delta.type === "text_delta"
       ) {
         raw += event.delta.text;
+      } else if (event.type === "message_delta") {
+        const reason = (event.delta as { stop_reason?: string | null })
+          .stop_reason;
+        if (typeof reason === "string") {
+          stopReason = reason;
+        }
       }
+    }
+
+    // Throw a typed MaxTokensError BEFORE parsing rather than letting
+    // the truncated payload fail JSON.parse with a generic SyntaxError.
+    // The truncation is structurally distinct from "the model emitted
+    // bad JSON" — the model didn't emit anything wrong, it just ran
+    // out of room. engine.ts catches MaxTokensError specifically and
+    // emits a precise retry hint + categorizes the saved-transcript
+    // failure shape as "max_tokens" instead of "parse" (the previous
+    // behavior, which misled future forensic passes about what failed).
+    if (stopReason === "max_tokens") {
+      throw new MaxTokensError("json");
     }
 
     return parseJSONResponse<T>(raw);
