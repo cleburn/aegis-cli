@@ -3,7 +3,7 @@
  *
  * Two aegis processes running in the same project would clobber each
  * other's writes and produce half-updated policy. The lock is a tiny
- * file at .agentpolicy/.aegis.lock containing the holder's PID; a
+ * file under the OS temp directory containing the holder's PID; a
  * second process checking into the same project sees the lock, probes
  * whether the holder is still alive, and either refuses (live process)
  * or takes over (stale lock from a crashed run).
@@ -14,9 +14,13 @@
  */
 
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
+import * as os from "node:os";
 import * as path from "node:path";
 
-const LOCK_FILENAME = ".aegis.lock";
+const LOCK_DIR = path.join(os.tmpdir(), "aegis-cli-locks");
+const LOCK_PREFIX = "aegis-init-";
+const LOCK_SUFFIX = ".lock";
 
 /**
  * Upper bound on how long a lock is considered legitimately held by a
@@ -127,9 +131,13 @@ export class LockConflictError extends Error {
  * other failure.
  */
 export function acquireLock(projectRoot: string): string {
-  const lockDir = path.join(projectRoot, ".agentpolicy");
-  fs.mkdirSync(lockDir, { recursive: true });
-  const lockPath = path.join(lockDir, LOCK_FILENAME);
+  const lockPath = lockPathForProject(projectRoot);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(path.dirname(lockPath), 0o700);
+  } catch {
+    // Best-effort hardening; the lock contents are operational, not secret.
+  }
 
   try {
     writeLockContents(lockPath, "wx");
@@ -301,16 +309,10 @@ export function registerExitCleanup(lockPath: string): void {
  * gone — callers run this from finally blocks where throwing would
  * mask the original error.
  *
- * After unlinking the lockfile, attempts to rmdir the parent
- * .agentpolicy/ directory. rmdir is non-recursive: it succeeds only
- * when the directory is truly empty. That converges the post-abort
- * state — if acquireLock created .agentpolicy/ on a project that
- * had none, and the run aborted before writePolicy landed any files,
- * the now-empty directory disappears with the lock so the next
- * `aegis init` greets the user as a first-meeting visitor instead
- * of treating the leftover artifact as a return-visit baseline.
- * When writePolicy did land files, rmdir fails with ENOTEMPTY and is
- * silently ignored — the policy is preserved.
+ * After unlinking the lockfile, attempts to prune the shared lock
+ * directory if it is empty. It never touches the project tree: lock
+ * acquisition must not create or remove .agentpolicy/ because the
+ * scanner uses that directory as the return-visit signal.
  */
 export function releaseLock(lockPath: string): void {
   try {
@@ -321,7 +323,24 @@ export function releaseLock(lockPath: string): void {
   try {
     fs.rmdirSync(path.dirname(lockPath));
   } catch {
-    // Directory has content (writePolicy completed, or user has
-    // pre-existing policy on disk) — leave it alone.
+    // Other project locks may still live here.
+  }
+}
+
+function lockPathForProject(projectRoot: string): string {
+  const canonicalRoot = canonicalProjectRoot(projectRoot);
+  const digest = crypto
+    .createHash("sha256")
+    .update(canonicalRoot)
+    .digest("hex");
+  return path.join(LOCK_DIR, `${LOCK_PREFIX}${digest}${LOCK_SUFFIX}`);
+}
+
+function canonicalProjectRoot(projectRoot: string): string {
+  const resolved = path.resolve(projectRoot);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
   }
 }
