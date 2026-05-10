@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Run <code>aegis init</code>, have a conversation, and give every AI agent that touches your codebase a structured operating contract. Schema-validated, machine-parseable, agent-agnostic.
+  Run <code>aegis init</code>, choose the model you want Aegis to use, have a conversation, and give every AI agent that touches your codebase a structured operating contract. Schema-validated, machine-parseable, multi-provider.
 </p>
 
 ---
@@ -42,6 +42,8 @@ aegis explain
 aegis validate
 ```
 
+On first run, Aegis asks you to pick a model explicitly. It supports Anthropic, OpenAI, Google, DeepSeek, Mistral, and local/open-source models served through an OpenAI-compatible local server such as Ollama, LM Studio, llama.cpp server, or vLLM. API keys are stored per provider in `~/.aegis/config.json`, and one provider is marked active.
+
 ## How `aegis init` Works
 
 <p align="center">
@@ -61,6 +63,8 @@ From there, the conversation is focused and specific. Aegis doesn't ask what lan
 - What should happen when an agent hits ambiguity or a gap in the rules
 
 The conversation moves fast. When Aegis has the full picture, your `.agentpolicy/` directory appears — complete, schema-validated, and ready for every agent that works here next.
+
+During a discovery session, type `/model` to switch models without leaving the conversation, or `/exit` to leave without writing changes. A model switch preserves the conversation history and saves the new provider as the active choice for future sessions.
 
 ## What Gets Generated
 
@@ -109,9 +113,20 @@ Three artifacts, one governance framework:
 ## Requirements
 
 - Node.js >= 22.3.0
-- An [Anthropic API key](https://console.anthropic.com/)
+- Credentials for whichever hosted provider you choose, or a running local OpenAI-compatible server for local/open-source models
 
-On first run, Aegis will prompt for your API key and store it locally.
+Aegis can read provider keys from the environment or from `~/.aegis/config.json`. The active provider's environment variable wins over the stored key for that provider:
+
+| Provider | Environment variable |
+|----------|----------------------|
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Google | `GOOGLE_API_KEY` |
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| Mistral | `MISTRAL_API_KEY` |
+| Local/open-source model | `AEGIS_CUSTOM_API_KEY` |
+
+For local/open-source models, Aegis prompts for the local server base URL and model ID. The API key is optional because many local servers do not require authentication.
 
 ## License
 

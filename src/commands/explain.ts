@@ -7,6 +7,8 @@
  */
 
 import chalk from "chalk";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { createActiveProvider } from "../llm/factory.js";
 import { explainPolicy } from "../policy/explainer.js";
 
@@ -14,12 +16,17 @@ const AEGIS = chalk.hex("#5B8DEF");
 
 export async function explainCommand(): Promise<void> {
   try {
+    const cwd = process.cwd();
+    if (!fs.existsSync(path.join(cwd, ".agentpolicy"))) {
+      throw new Error("No .agentpolicy/ directory found. Run `aegis init` first.");
+    }
+
     const provider = await createActiveProvider();
 
     console.log("");
     process.stdout.write(`  ${AEGIS("aegis")}  `);
 
-    await explainPolicy(process.cwd(), provider, (token) => {
+    await explainPolicy(cwd, provider, (token) => {
       process.stdout.write(token);
     });
 

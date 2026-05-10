@@ -12,6 +12,7 @@ import { MODEL_OPTIONS, type ModelOption } from "./models.js";
 import {
   getActiveProviderConfig,
   getProviderEnvVar,
+  getProviderEnvValue,
   prompt,
   readConfig,
   saveProviderConfig,
@@ -252,17 +253,17 @@ function hasCurrentModel(active: ActiveProviderConfig): boolean {
 
 async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput> {
   if (option.provider === "custom") {
-    const baseUrl = (await prompt("  Base URL: ")).trim();
+    const baseUrl = (await prompt("  Local server base URL: ")).trim();
     if (!baseUrl) {
-      throw new AegisExit(130, "Custom provider base URL is required.");
+      throw new AegisExit(130, "Local model server base URL is required.");
     }
 
-    const model = (await prompt("  Model ID: ")).trim();
+    const model = (await prompt("  Local model ID: ")).trim();
     if (!model) {
-      throw new AegisExit(130, "Custom provider model ID is required.");
+      throw new AegisExit(130, "Local model ID is required.");
     }
 
-    const apiKey = (await prompt("  API key (optional): ", true)).trim();
+    const apiKey = (await prompt("  API key, if your local server requires one (optional): ", true)).trim();
     return {
       provider: "custom",
       baseUrl,
@@ -340,22 +341,23 @@ function providerFromInput(input: ProviderConfigInput): LLMProvider {
 
 function inputFromStoredConfig(option: ModelOption): ProviderConfigInput | null {
   const stored = readConfig().providers[option.provider];
-  if (!stored) return null;
+  const envKey = getProviderEnvValue(option.provider);
 
   if (option.provider === "custom") {
-    if (!stored.baseUrl || !stored.model) return null;
+    if (!stored?.baseUrl || !stored.model) return null;
     return {
       provider: "custom",
       baseUrl: stored.baseUrl,
-      ...(stored.apiKey ? { apiKey: stored.apiKey } : {}),
+      ...(envKey || stored.apiKey ? { apiKey: envKey ?? stored.apiKey } : {}),
       model: stored.model,
     };
   }
 
-  if (!stored.apiKey) return null;
+  const apiKey = envKey ?? stored?.apiKey;
+  if (!apiKey) return null;
   return {
     provider: option.provider,
-    apiKey: stored.apiKey,
+    apiKey,
     model: option.model,
   };
 }

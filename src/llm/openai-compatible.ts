@@ -41,9 +41,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.model = options.model;
     this.tokenLimitField = options.tokenLimitField ?? "max_completion_tokens";
     this.client = new OpenAI({
-      // The SDK requires a non-empty key even when local endpoints ignore auth.
       apiKey: options.apiKey ?? "not-needed",
       ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+      ...(options.apiKey ? {} : { fetch: withoutAuthorizationHeader }),
     });
   }
 
@@ -269,13 +269,23 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
 export class CustomProvider extends OpenAICompatibleProvider {
   constructor(baseURL: string, apiKey?: string, model = defaultModelForProvider("custom")) {
     super({
-      name: "Custom",
+      name: "Local model",
       apiKey,
       model,
       baseURL,
       tokenLimitField: "max_tokens",
     });
   }
+}
+
+async function withoutAuthorizationHeader(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  headers.delete("authorization");
+  headers.delete("Authorization");
+  return fetch(input, { ...init, headers });
 }
 
 function toOpenAIMessages(messages: Message[], systemPrompt: string) {

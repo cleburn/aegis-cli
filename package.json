@@ -8,10 +8,12 @@
     "aegis": "dist/bin/aegis.js"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "aegis-banner.svg",
+    "assets/"
   ],
   "scripts": {
-    "build": "tsc && cp src/schemas/*.json dist/src/schemas/",
+    "build": "rm -rf dist && tsc && mkdir -p dist/src/schemas && cp src/schemas/*.json dist/src/schemas/",
     "prepublishOnly": "npm run build",
     "dev": "tsx bin/aegis.ts",
     "typecheck": "tsc --noEmit"

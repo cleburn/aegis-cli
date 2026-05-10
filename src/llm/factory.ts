@@ -59,7 +59,7 @@ export function createProviderFromActive(active: ActiveProviderConfig): LLMProvi
       if (!active.baseUrl) {
         throw new AegisExit(
           1,
-          "Custom provider is active but no base URL is configured."
+          "Local model provider is active but no base URL is configured."
         );
       }
       return new CustomProvider(active.baseUrl, active.apiKey, model);
@@ -87,6 +87,6 @@ function providerLabel(provider: ActiveProviderConfig["provider"]): string {
     case "mistral":
       return "Mistral";
     case "custom":
-      return "Custom";
+      return "Local model";
   }
 }

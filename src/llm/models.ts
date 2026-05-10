@@ -27,7 +27,7 @@ export const MODEL_OPTIONS = [
   { provider: "deepseek", model: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
   { provider: "deepseek", model: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
   { provider: "mistral", model: "mistral-large-2512", label: "Mistral Large 3" },
-  { provider: "custom", model: "local-model", label: "Custom (OpenAI-compatible)" },
+  { provider: "custom", model: "local-model", label: "Local / open-source model (Gemma, Qwen, Kimi, etc...)" },
 ] as const satisfies ReadonlyArray<{
   provider: ProviderId;
   model: string;
@@ -40,6 +40,10 @@ export function modelLabelForProvider(
   provider: ProviderId,
   configuredModel?: string
 ): string {
+  if (provider === "custom" && configuredModel) {
+    return configuredModel;
+  }
+
   const model = configuredModel ?? defaultModelForProvider(provider);
   const option = MODEL_OPTIONS.find((candidate) => {
     if (provider === "custom") return candidate.provider === "custom";

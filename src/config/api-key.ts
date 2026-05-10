@@ -206,12 +206,16 @@ export function getProviderEnvVar(provider: ProviderId): string {
   return PROVIDER_ENV_VARS[provider];
 }
 
+export function getProviderEnvValue(provider: ProviderId): string | undefined {
+  return process.env[getProviderEnvVar(provider)];
+}
+
 export function getActiveProviderConfig(): ActiveProviderConfig {
   const config = readConfig();
   const provider = config.activeProvider;
   const stored = config.providers[provider] ?? {};
   const envVar = getProviderEnvVar(provider);
-  const envKey = process.env[envVar];
+  const envKey = getProviderEnvValue(provider);
   const apiKey = envKey || stored.apiKey;
 
   return {
