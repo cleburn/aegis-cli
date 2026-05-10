@@ -30,6 +30,8 @@ type OpenAICompatibleOptions = {
   tokenLimitField?: "max_tokens" | "max_completion_tokens";
 };
 
+const LOCAL_AUTH_PLACEHOLDER = "aegis-local-auth-placeholder";
+
 export class OpenAICompatibleProvider implements LLMProvider {
   readonly name: string;
   protected client: OpenAI;
@@ -41,7 +43,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.model = options.model;
     this.tokenLimitField = options.tokenLimitField ?? "max_completion_tokens";
     this.client = new OpenAI({
-      apiKey: options.apiKey ?? "not-needed",
+      // The OpenAI SDK requires an apiKey at construction; local servers
+      // without auth get this value stripped by the custom fetch below.
+      apiKey: options.apiKey ?? LOCAL_AUTH_PLACEHOLDER,
       ...(options.baseURL ? { baseURL: options.baseURL } : {}),
       ...(options.apiKey ? {} : { fetch: withoutAuthorizationHeader }),
     });
