@@ -356,7 +356,7 @@ export class DiscoveryEngine {
     const announcement =
       `Switched to ${modelLabel}. Soft reset: the conversation history is preserved, and this model will read the earlier turns on the next response even though it did not author them.`;
     this.ui.showAegisMessage(announcement);
-    this.messages.push({ role: "user", content: `[system] ${announcement}` });
+    this.messages.push({ role: "system", content: announcement });
   }
 
   /**
@@ -480,8 +480,8 @@ export class DiscoveryEngine {
       // Guard against runaway chains
       if (depth >= MAX_READ_DEPTH) {
         this.messages.push({
-          role: "user",
-          content: `[system] Read limit reached for this turn (${MAX_READ_DEPTH} reads). Please respond to the human without another file read.`,
+          role: "system",
+          content: `Read limit reached for this turn (${MAX_READ_DEPTH} reads). Please respond to the human without another file read.`,
         });
         return this.getAegisResponse(depth + 1);
       }
@@ -730,7 +730,7 @@ export class DiscoveryEngine {
             const header = m.content.split("\n", 1)[0];
             return `Human: ${header}\n\n[body elided — see EXISTING POLICY BASELINE]`;
           }
-          return `${m.role === "user" ? "Human" : "Aegis"}: ${m.content}`;
+          return `${transcriptRoleLabel(m.role)}: ${m.content}`;
         })
         .join("\n\n");
 
@@ -742,8 +742,8 @@ export class DiscoveryEngine {
       // failed and burns the budget on the same bug.
       if (lastFailure) {
         extractionMessages.push({
-          role: "user",
-          content: `[system] The previous extraction attempt failed: ${lastFailure}. Re-emit the JSON with this corrected. All other rules from the system prompt still apply — preserve baseline content verbatim, apply only the conversation-named edits, output a single valid JSON object.`,
+          role: "system",
+          content: `The previous extraction attempt failed: ${lastFailure}. Re-emit the JSON with this corrected. All other rules from the system prompt still apply — preserve baseline content verbatim, apply only the conversation-named edits, output a single valid JSON object.`,
         });
       }
       extractionMessages.push({
@@ -1095,6 +1095,17 @@ function isNoChangeConfirmation(userInput: string): boolean {
     "we're all set",
   ];
   return noChangePhrases.some((p) => trimmed.includes(p));
+}
+
+function transcriptRoleLabel(role: Message["role"]): string {
+  switch (role) {
+    case "system":
+      return "System";
+    case "user":
+      return "Human";
+    case "assistant":
+      return "Aegis";
+  }
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { ProviderValidateResult } from "./provider.js";
+import type { Message, ProviderMessage, ProviderValidateResult } from "./provider.js";
 
 export const MAX_TOKENS = 16384;
 export const MAX_TOKENS_JSON = 128000;
@@ -64,4 +64,19 @@ export function extractStatus(err: unknown): number | undefined {
   }
 
   return undefined;
+}
+
+export function splitSystemMessages(
+  messages: Message[],
+  systemPrompt: string
+): { systemPrompt: string; messages: ProviderMessage[] } {
+  const systemMessages = messages.filter((message) => message.role === "system");
+  return {
+    systemPrompt: [systemPrompt, ...systemMessages.map((message) => message.content)]
+      .filter(Boolean)
+      .join("\n\n"),
+    messages: messages.filter(
+      (message): message is ProviderMessage => message.role !== "system"
+    ),
+  };
 }

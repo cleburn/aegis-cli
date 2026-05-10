@@ -7,9 +7,11 @@
  */
 
 export interface Message {
-  role: "user" | "assistant";
+  role: "system" | "user" | "assistant";
   content: string;
 }
+
+export type ProviderMessage = Message & { role: "user" | "assistant" };
 
 export interface StreamEvent {
   type: "text_delta" | "message_start" | "message_stop";

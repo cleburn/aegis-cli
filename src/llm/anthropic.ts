@@ -10,6 +10,7 @@ import {
   MAX_TOKENS,
   MAX_TOKENS_JSON,
   parseJSONResponse,
+  splitSystemMessages,
   truncationNote,
 } from "./common.js";
 import { defaultModelForProvider } from "./models.js";
@@ -29,11 +30,12 @@ export class AnthropicProvider implements LLMProvider {
     systemPrompt: string,
     maxTokens: number = MAX_TOKENS
   ): Promise<string> {
+    const prepared = splitSystemMessages(messages, systemPrompt);
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: messages.map((m) => ({
+      system: prepared.systemPrompt,
+      messages: prepared.messages.map((m) => ({
         role: m.role,
         content: m.content,
       })),
@@ -53,11 +55,12 @@ export class AnthropicProvider implements LLMProvider {
     systemPrompt: string,
     onToken: (token: string) => void
   ): Promise<string> {
+    const prepared = splitSystemMessages(messages, systemPrompt);
     const stream = this.client.messages.stream({
       model: this.model,
       max_tokens: MAX_TOKENS,
-      system: systemPrompt,
-      messages: messages.map((m) => ({
+      system: prepared.systemPrompt,
+      messages: prepared.messages.map((m) => ({
         role: m.role,
         content: m.content,
       })),
@@ -112,14 +115,15 @@ export class AnthropicProvider implements LLMProvider {
     schema?: object
   ): Promise<T> {
     const jsonSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation — just the JSON object.`;
+    const prepared = splitSystemMessages(messages, jsonSystemPrompt);
 
     // Use streaming internally to avoid API timeout on large responses.
     // The stream collects the full response silently — no token callback needed.
     const stream = this.client.messages.stream({
       model: this.model,
       max_tokens: MAX_TOKENS_JSON,
-      system: jsonSystemPrompt,
-      messages: messages.map((m) => ({
+      system: prepared.systemPrompt,
+      messages: prepared.messages.map((m) => ({
         role: m.role,
         content: m.content,
       })),

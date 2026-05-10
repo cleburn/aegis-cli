@@ -10,6 +10,7 @@ import {
   MAX_TOKENS,
   MAX_TOKENS_JSON,
   parseJSONResponse,
+  splitSystemMessages,
   truncationNote,
 } from "./common.js";
 import { defaultModelForProvider } from "./models.js";
@@ -34,11 +35,12 @@ export class GoogleProvider implements LLMProvider {
     systemPrompt: string,
     maxTokens: number = MAX_TOKENS
   ): Promise<string> {
+    const prepared = splitSystemMessages(messages, systemPrompt);
     const response = await this.client.models.generateContent({
       model: this.model,
-      contents: toGoogleContents(messages),
+      contents: toGoogleContents(prepared.messages),
       config: {
-        systemInstruction: systemPrompt,
+        systemInstruction: prepared.systemPrompt,
         maxOutputTokens: maxTokens,
       },
     });
@@ -51,11 +53,12 @@ export class GoogleProvider implements LLMProvider {
     systemPrompt: string,
     onToken: (token: string) => void
   ): Promise<string> {
+    const prepared = splitSystemMessages(messages, systemPrompt);
     const stream = await this.client.models.generateContentStream({
       model: this.model,
-      contents: toGoogleContents(messages),
+      contents: toGoogleContents(prepared.messages),
       config: {
-        systemInstruction: systemPrompt,
+        systemInstruction: prepared.systemPrompt,
         maxOutputTokens: MAX_TOKENS,
       },
     });
@@ -90,11 +93,12 @@ export class GoogleProvider implements LLMProvider {
     schema?: object
   ): Promise<T> {
     const jsonSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation — just the JSON object.`;
+    const prepared = splitSystemMessages(messages, jsonSystemPrompt);
     const response = await this.client.models.generateContent({
       model: this.model,
-      contents: toGoogleContents(messages),
+      contents: toGoogleContents(prepared.messages),
       config: {
-        systemInstruction: jsonSystemPrompt,
+        systemInstruction: prepared.systemPrompt,
         maxOutputTokens: MAX_TOKENS_JSON,
         responseMimeType: "application/json",
         ...(schema ? { responseJsonSchema: schema } : {}),
