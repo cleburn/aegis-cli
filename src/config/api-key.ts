@@ -7,11 +7,80 @@ import { AegisExit } from "../abort.js";
 const AEGIS_DIR = path.join(os.homedir(), ".aegis");
 const CONFIG_PATH = path.join(AEGIS_DIR, "config.json");
 
-interface AegisConfig {
-  anthropic_api_key?: string;
+export const PROVIDER_IDS = [
+  "anthropic",
+  "openai",
+  "google",
+  "deepseek",
+  "mistral",
+  "custom",
+] as const;
+
+export type ProviderId = typeof PROVIDER_IDS[number];
+export type StandardProviderId = Exclude<ProviderId, "custom">;
+
+export interface ProviderConfig {
+  apiKey?: string;
+  baseUrl?: string;
 }
 
-function readConfig(): AegisConfig {
+export interface AegisConfig {
+  version: 1;
+  activeProvider: ProviderId;
+  providers: Partial<Record<ProviderId, ProviderConfig>>;
+}
+
+export type ProviderConfigInput =
+  | { provider: StandardProviderId; apiKey: string }
+  | { provider: "custom"; baseUrl: string; apiKey?: string };
+
+export type ActiveProviderConfig = {
+  provider: ProviderId;
+  apiKey?: string;
+  baseUrl?: string;
+  apiKeySource: "env" | "config" | "missing";
+  envVar: string;
+};
+
+const DEFAULT_PROVIDER: ProviderId = "anthropic";
+const LEGACY_API_KEY_FIELD = ["anthropic", "api", "key"].join("_");
+
+const PROVIDER_ENV_VARS: Record<ProviderId, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GOOGLE_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  custom: "AEGIS_CUSTOM_API_KEY",
+};
+
+function isProviderId(value: unknown): value is ProviderId {
+  return typeof value === "string" && PROVIDER_IDS.includes(value as ProviderId);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function emptyConfig(): AegisConfig {
+  return {
+    version: 1,
+    activeProvider: DEFAULT_PROVIDER,
+    providers: {},
+  };
+}
+
+function providerConfigEquals(a: unknown, b: ProviderConfig | undefined): boolean {
+  if (!isRecord(a)) return b === undefined;
+  const apiKey = a.apiKey;
+  const baseUrl = a.baseUrl;
+  return (
+    (typeof apiKey === "string" ? apiKey : undefined) === b?.apiKey &&
+    (typeof baseUrl === "string" ? baseUrl : undefined) === b?.baseUrl
+  );
+}
+
+function readRawConfig(): unknown {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
@@ -19,7 +88,72 @@ function readConfig(): AegisConfig {
   } catch {
     // Corrupted config — start fresh
   }
-  return {};
+  return null;
+}
+
+function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean } {
+  if (!isRecord(raw)) {
+    return { config: emptyConfig(), changed: false };
+  }
+
+  const legacyKey = raw[LEGACY_API_KEY_FIELD];
+  if (typeof legacyKey === "string" && legacyKey.length > 0) {
+    return {
+      config: {
+        version: 1,
+        activeProvider: "anthropic",
+        providers: {
+          anthropic: { apiKey: legacyKey },
+        },
+      },
+      changed: true,
+    };
+  }
+
+  const providers: Partial<Record<ProviderId, ProviderConfig>> = {};
+  let changed = raw.version !== 1 || !isProviderId(raw.activeProvider);
+  if (isRecord(raw.providers)) {
+    for (const provider of PROVIDER_IDS) {
+      const entry = raw.providers[provider];
+      if (!isRecord(entry)) continue;
+
+      const apiKey = entry.apiKey;
+      const baseUrl = entry.baseUrl;
+      if (provider === "custom") {
+        providers.custom = {
+          ...(typeof apiKey === "string" ? { apiKey } : {}),
+          ...(typeof baseUrl === "string" ? { baseUrl } : {}),
+        };
+      } else if (typeof apiKey === "string") {
+        providers[provider] = { apiKey };
+      }
+    }
+  } else {
+    changed = true;
+  }
+
+  if (isRecord(raw.providers)) {
+    for (const key of Object.keys(raw.providers)) {
+      if (!isProviderId(key)) {
+        changed = true;
+        continue;
+      }
+      if (!providerConfigEquals(raw.providers[key], providers[key])) {
+        changed = true;
+      }
+    }
+  }
+
+  const activeProvider = isProviderId(raw.activeProvider)
+    ? raw.activeProvider
+    : DEFAULT_PROVIDER;
+  const config: AegisConfig = {
+    version: 1,
+    activeProvider,
+    providers,
+  };
+
+  return { config, changed };
 }
 
 function writeConfig(config: AegisConfig): void {
@@ -49,6 +183,74 @@ function writeConfig(config: AegisConfig): void {
     mode: 0o600,
   });
   fs.chmodSync(CONFIG_PATH, 0o600);
+}
+
+export function readConfig(): AegisConfig {
+  const { config, changed } = normalizeConfig(readRawConfig());
+  if (changed) {
+    writeConfig(config);
+  }
+  return config;
+}
+
+export function getProviderEnvVar(provider: ProviderId): string {
+  return PROVIDER_ENV_VARS[provider];
+}
+
+export function getActiveProviderConfig(): ActiveProviderConfig {
+  const config = readConfig();
+  const provider = config.activeProvider;
+  const stored = config.providers[provider] ?? {};
+  const envVar = getProviderEnvVar(provider);
+  const envKey = process.env[envVar];
+  const apiKey = envKey || stored.apiKey;
+
+  return {
+    provider,
+    ...(apiKey ? { apiKey } : {}),
+    ...(provider === "custom" && stored.baseUrl ? { baseUrl: stored.baseUrl } : {}),
+    apiKeySource: envKey ? "env" : stored.apiKey ? "config" : "missing",
+    envVar,
+  };
+}
+
+export function saveProviderConfig(
+  input: ProviderConfigInput,
+  options: { makeActive?: boolean } = {}
+): AegisConfig {
+  const config = readConfig();
+  const providerConfig: ProviderConfig =
+    input.provider === "custom"
+      ? {
+          baseUrl: input.baseUrl,
+          ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+        }
+      : { apiKey: input.apiKey };
+
+  const next: AegisConfig = {
+    version: 1,
+    activeProvider: options.makeActive === false
+      ? config.activeProvider
+      : input.provider,
+    providers: {
+      ...config.providers,
+      [input.provider]: providerConfig,
+    },
+  };
+
+  writeConfig(next);
+  return next;
+}
+
+export function setActiveProvider(provider: ProviderId): AegisConfig {
+  const config = readConfig();
+  const next: AegisConfig = {
+    version: 1,
+    activeProvider: provider,
+    providers: { ...config.providers },
+  };
+  writeConfig(next);
+  return next;
 }
 
 function prompt(question: string, hidden = false): Promise<string> {
@@ -111,23 +313,10 @@ function prompt(question: string, hidden = false): Promise<string> {
   });
 }
 
-/**
- * Resolve an API key through the cascade:
- * 1. ANTHROPIC_API_KEY env var
- * 2. ~/.aegis/config.json
- * 3. Interactive prompt (with option to save)
- */
 export async function resolveApiKey(): Promise<string> {
-  // 1. Environment variable
-  const envKey = process.env.ANTHROPIC_API_KEY;
-  if (envKey) {
-    return envKey;
-  }
-
-  // 2. Config file
-  const config = readConfig();
-  if (config.anthropic_api_key) {
-    return config.anthropic_api_key;
+  const active = getActiveProviderConfig();
+  if (active.apiKey) {
+    return active.apiKey;
   }
 
   // 3. Interactive prompt
@@ -146,7 +335,7 @@ export async function resolveApiKey(): Promise<string> {
   );
 
   if (saveChoice.toLowerCase() === "y" || saveChoice.toLowerCase() === "yes") {
-    writeConfig({ ...config, anthropic_api_key: key });
+    saveProviderConfig({ provider: "anthropic", apiKey: key });
     console.log("  Saved. (File is chmod 600 — only you can read it.)\n");
   } else {
     console.log("  Got it — using for this session only.\n");
