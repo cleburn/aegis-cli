@@ -1,9 +1,12 @@
 import { AegisExit } from "../abort.js";
 import {
   getActiveProviderConfig,
-  resolveApiKey,
   type ActiveProviderConfig,
 } from "../config/api-key.js";
+import {
+  hasUsableActiveProvider,
+  runProviderInstallFlow,
+} from "./install.js";
 import type { LLMProvider } from "./provider.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { GoogleProvider } from "./google.js";
@@ -17,9 +20,8 @@ import { resolveModelForProvider } from "./models.js";
 
 export async function createActiveProvider(): Promise<LLMProvider> {
   let active = getActiveProviderConfig();
-  if (active.provider === "anthropic" && !active.apiKey) {
-    const apiKey = await resolveApiKey();
-    active = { ...getActiveProviderConfig(), apiKey };
+  if (!hasUsableActiveProvider(active)) {
+    active = await runProviderInstallFlow();
   }
 
   const model = resolveModelForProvider(active.provider, active.model);

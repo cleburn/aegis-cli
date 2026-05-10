@@ -97,7 +97,7 @@ export class GoogleProvider implements LLMProvider {
         systemInstruction: jsonSystemPrompt,
         maxOutputTokens: MAX_TOKENS_JSON,
         responseMimeType: "application/json",
-        ...(schema ? { responseSchema: schema as never } : {}),
+        ...(schema ? { responseJsonSchema: schema } : {}),
       },
     });
 

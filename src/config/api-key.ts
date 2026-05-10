@@ -267,7 +267,7 @@ export function setActiveProvider(provider: ProviderId): AegisConfig {
   return next;
 }
 
-function prompt(question: string, hidden = false): Promise<string> {
+export function prompt(question: string, hidden = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({
       input: process.stdin,
@@ -319,41 +319,14 @@ function prompt(question: string, hidden = false): Promise<string> {
       };
       stdin.on("data", onData);
     } else {
+      rl.on("SIGINT", () => {
+        rl.close();
+        reject(new AegisExit(130, "Input canceled."));
+      });
       rl.question(question, (answer) => {
         rl.close();
         resolve(answer.trim());
       });
     }
   });
-}
-
-export async function resolveApiKey(): Promise<string> {
-  const active = getActiveProviderConfig();
-  if (active.apiKey) {
-    return active.apiKey;
-  }
-
-  // 3. Interactive prompt
-  console.log("");
-  console.log("  Hi, please enter your Anthropic API key to get started.");
-  console.log("  You can also set the ANTHROPIC_API_KEY environment variable.\n");
-
-  const key = await prompt("  API key: ", true);
-
-  if (!key || !key.startsWith("sk-")) {
-    throw new AegisExit(1, "That doesn't look like a valid Anthropic API key.");
-  }
-
-  const saveChoice = await prompt(
-    "  Save to ~/.aegis/config.json for next time? (y/n): "
-  );
-
-  if (saveChoice.toLowerCase() === "y" || saveChoice.toLowerCase() === "yes") {
-    saveProviderConfig({ provider: "anthropic", apiKey: key });
-    console.log("  Saved. (File is chmod 600 — only you can read it.)\n");
-  } else {
-    console.log("  Got it — using for this session only.\n");
-  }
-
-  return key;
 }

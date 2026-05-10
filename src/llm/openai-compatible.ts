@@ -4,6 +4,10 @@ import type {
   ChatCompletionCreateParamsStreaming,
 } from "openai/resources/chat/completions";
 import type {
+  ResponseCreateParamsNonStreaming,
+  ResponseCreateParamsStreaming,
+} from "openai/resources/responses/responses";
+import type {
   LLMProvider,
   Message,
   ProviderValidateResult,
@@ -37,6 +41,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.model = options.model;
     this.tokenLimitField = options.tokenLimitField ?? "max_completion_tokens";
     this.client = new OpenAI({
+      // The SDK requires a non-empty key even when local endpoints ignore auth.
       apiKey: options.apiKey ?? "not-needed",
       ...(options.baseURL ? { baseURL: options.baseURL } : {}),
     });
@@ -143,9 +148,109 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 }
 
-export class OpenAIProvider extends OpenAICompatibleProvider {
+export class OpenAIProvider implements LLMProvider {
+  readonly name = "OpenAI";
+  private client: OpenAI;
+  private model: string;
+
   constructor(apiKey: string, model = defaultModelForProvider("openai")) {
-    super({ name: "OpenAI", apiKey, model });
+    this.client = new OpenAI({ apiKey });
+    this.model = model;
+  }
+
+  async chat(
+    messages: Message[],
+    systemPrompt: string,
+    maxTokens: number = MAX_TOKENS
+  ): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.model,
+      instructions: systemPrompt,
+      input: toResponseMessages(messages),
+      max_output_tokens: maxTokens,
+    });
+
+    return response.output_text ?? "";
+  }
+
+  async chatStream(
+    messages: Message[],
+    systemPrompt: string,
+    onToken: (token: string) => void
+  ): Promise<string> {
+    const params: ResponseCreateParamsStreaming = {
+      model: this.model,
+      instructions: systemPrompt,
+      input: toResponseMessages(messages),
+      max_output_tokens: MAX_TOKENS,
+      stream: true,
+    };
+    const stream = await this.client.responses.create(params);
+
+    let full = "";
+    let incompleteReason: string | undefined;
+    for await (const event of stream) {
+      if (event.type === "response.output_text.delta") {
+        full += event.delta;
+        onToken(event.delta);
+      } else if (event.type === "response.incomplete") {
+        incompleteReason = event.response.incomplete_details?.reason;
+      } else if (event.type === "response.completed") {
+        incompleteReason = event.response.incomplete_details?.reason;
+      }
+    }
+
+    if (incompleteReason === "max_output_tokens") {
+      const note = truncationNote();
+      full += note;
+      onToken(note);
+    }
+
+    return full;
+  }
+
+  async chatJSON<T = unknown>(
+    messages: Message[],
+    systemPrompt: string,
+    schema?: object
+  ): Promise<T> {
+    const jsonSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation — just the JSON object.`;
+    const params: ResponseCreateParamsNonStreaming = {
+      model: this.model,
+      instructions: jsonSystemPrompt,
+      input: toResponseMessages(messages),
+      max_output_tokens: MAX_TOKENS_JSON,
+      text: {
+        format: schema
+          ? {
+              type: "json_schema",
+              name: "aegis_response",
+              schema: schema as { [key: string]: unknown },
+              strict: true,
+            }
+          : { type: "json_object" },
+      },
+    };
+    const response = await this.client.responses.create(params);
+
+    if (response.incomplete_details?.reason === "max_output_tokens") {
+      throw new MaxTokensError("json");
+    }
+
+    return parseJSONResponse<T>(response.output_text ?? "");
+  }
+
+  async validate(): Promise<ProviderValidateResult> {
+    try {
+      await this.client.responses.create({
+        model: this.model,
+        input: "ping",
+        max_output_tokens: 10,
+      });
+      return { ok: true };
+    } catch (err) {
+      return classifyProviderError(err);
+    }
   }
 }
 
@@ -181,4 +286,11 @@ function toOpenAIMessages(messages: Message[], systemPrompt: string) {
       content: m.content,
     })),
   ];
+}
+
+function toResponseMessages(messages: Message[]) {
+  return messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
 }
