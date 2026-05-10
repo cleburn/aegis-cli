@@ -13,12 +13,14 @@ import {
   getActiveProviderConfig,
   getProviderEnvVar,
   prompt,
+  readConfig,
   saveProviderConfig,
   type ActiveProviderConfig,
   type ProviderConfigInput,
 } from "../config/api-key.js";
 
 type InstallResult = "saved" | "pick-again";
+type ModelSelection = { option: ModelOption; keepCurrent: boolean };
 
 export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
@@ -33,38 +35,93 @@ export async function runProviderInstallFlow(): Promise<ActiveProviderConfig> {
 
   while (true) {
     const option = await selectModel();
-    const result = await configureAndValidate(option);
+    const result = await configureAndValidate(option, { preferStored: false });
     if (result === "saved") {
       return getActiveProviderConfig();
     }
   }
 }
 
-async function selectModel(): Promise<ModelOption> {
+export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
+  const active = getActiveProviderConfig();
+  if (!hasUsableActiveProvider(active)) {
+    return runProviderInstallFlow();
+  }
+
+  console.log("");
+  if (!hasCurrentModel(active)) {
+    console.log("  Choose the model Aegis should use.");
+    while (true) {
+      const option = await selectModel();
+      const result = await configureAndValidate(option, {
+        preferStored: true,
+      });
+      if (result === "saved") {
+        return getActiveProviderConfig();
+      }
+    }
+  }
+
+  console.log("  Confirm the model Aegis should use for this session.");
+
+  while (true) {
+    const selection = await selectModel(active);
+    if (selection.keepCurrent) {
+      return active;
+    }
+    const result = await configureAndValidate(selection.option, {
+      preferStored: true,
+    });
+    if (result === "saved") {
+      return getActiveProviderConfig();
+    }
+  }
+}
+
+async function selectModel(): Promise<ModelOption>;
+async function selectModel(current: ActiveProviderConfig): Promise<ModelSelection>;
+async function selectModel(
+  current?: ActiveProviderConfig
+): Promise<ModelOption | ModelSelection> {
+  const currentIndex = current ? currentModelIndex(current) : -1;
   console.log("");
   MODEL_OPTIONS.forEach((option, index) => {
-    console.log(`  ${index + 1}. ${option.label}`);
+    const marker = index === currentIndex ? " (current)" : "";
+    console.log(`  ${index + 1}. ${option.label}${marker}`);
   });
   console.log("");
 
   while (true) {
-    const raw = await prompt("  Select a model by number: ");
+    const raw = await prompt(
+      currentIndex >= 0
+        ? "  Select a model by number, or press Enter to keep current: "
+        : "  Select a model by number: "
+    );
+    if (!raw && current && currentIndex >= 0) {
+      return { option: MODEL_OPTIONS[currentIndex], keepCurrent: true };
+    }
     if (!raw) {
       throw new AegisExit(130, "Model selection canceled.");
     }
 
     const selected = Number(raw);
     if (Number.isInteger(selected) && selected >= 1 && selected <= MODEL_OPTIONS.length) {
-      return MODEL_OPTIONS[selected - 1];
+      return current
+        ? { option: MODEL_OPTIONS[selected - 1], keepCurrent: false }
+        : MODEL_OPTIONS[selected - 1];
     }
 
     console.log(`  Enter a number from 1 to ${MODEL_OPTIONS.length}.`);
   }
 }
 
-async function configureAndValidate(option: ModelOption): Promise<InstallResult> {
+async function configureAndValidate(
+  option: ModelOption,
+  options: { preferStored: boolean }
+): Promise<InstallResult> {
+  let input = options.preferStored ? inputFromStoredConfig(option) : null;
   while (true) {
-    const input = await promptForConfig(option);
+    input ??= await promptForConfig(option);
     const provider = providerFromInput(input);
 
     while (true) {
@@ -80,6 +137,7 @@ async function configureAndValidate(option: ModelOption): Promise<InstallResult>
         console.log(
           `  ${provider.name} rejected those credentials. Re-enter them to try again.`
         );
+        input = null;
         break;
       }
 
@@ -102,6 +160,22 @@ async function configureAndValidate(option: ModelOption): Promise<InstallResult>
       throw new AegisExit(130, "Provider setup canceled.");
     }
   }
+}
+
+function currentModelIndex(active: ActiveProviderConfig): number {
+  const index = MODEL_OPTIONS.findIndex((option) => {
+    if (active.provider === "custom") return option.provider === "custom";
+    return option.provider === active.provider && option.model === active.model;
+  });
+  if (index >= 0) return index;
+  if (!active.model) {
+    return MODEL_OPTIONS.findIndex((option) => option.provider === active.provider);
+  }
+  return -1;
+}
+
+function hasCurrentModel(active: ActiveProviderConfig): boolean {
+  return Boolean(active.model);
 }
 
 async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput> {
@@ -190,4 +264,26 @@ function providerFromInput(input: ProviderConfigInput): LLMProvider {
     case "custom":
       return new CustomProvider(input.baseUrl, input.apiKey, input.model);
   }
+}
+
+function inputFromStoredConfig(option: ModelOption): ProviderConfigInput | null {
+  const stored = readConfig().providers[option.provider];
+  if (!stored) return null;
+
+  if (option.provider === "custom") {
+    if (!stored.baseUrl || !stored.model) return null;
+    return {
+      provider: "custom",
+      baseUrl: stored.baseUrl,
+      ...(stored.apiKey ? { apiKey: stored.apiKey } : {}),
+      model: stored.model ?? option.model,
+    };
+  }
+
+  if (!stored.apiKey) return null;
+  return {
+    provider: option.provider,
+    apiKey: stored.apiKey,
+    model: option.model,
+  };
 }

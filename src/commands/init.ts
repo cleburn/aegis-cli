@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { createActiveProvider } from "../llm/factory.js";
+import { createInitProvider } from "../llm/factory.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
 import {
@@ -145,36 +145,7 @@ export async function initCommand(): Promise<void> {
   }
 
   try {
-    const provider = await createActiveProvider();
-
-    // Validate API key quietly. The provider distinguishes auth
-    // failure (the API rejected the key) from transport failure
-    // (anything else — connectivity, rate limit, 5xx, timeout)
-    // so the user-facing error names the actual cause: a rejected
-    // key sends them back to re-enter, a transport failure tells
-    // them their key isn't the problem and the request just
-    // didn't complete. The transport bucket is intentionally
-    // broad — a finer split (network vs rate-limit vs server)
-    // would let us suggest a more specific action, but the
-    // SDK's error detail already carries that signal in the
-    // detail field, and over-claiming a single cause (e.g.
-    // "network issue") is worse UX than leaving the cause
-    // visible in the detail and letting the user interpret it.
-    const validation = await provider.validate();
-    if (!validation.ok) {
-      if (validation.reason === "auth") {
-        throw new AegisExit(
-          1,
-          `${provider.name} rejected that API key as invalid. Check that you copied it correctly and try again.`
-        );
-      }
-      throw new AegisExit(
-        1,
-        `Couldn't verify your API key with ${provider.name}${
-          validation.detail ? ` — ${validation.detail}` : ""
-        }. Your key isn't being rejected; the request just didn't complete. Try again in a moment.`
-      );
-    }
+    const { provider, modelLabel } = await createInitProvider();
 
     // Scan the repo quietly — Aegis does his homework before the meeting
     const scan = await scanRepo(cwd);
@@ -191,9 +162,9 @@ export async function initCommand(): Promise<void> {
     // dirs, malformed JSON all route through here instead of the
     // return-visit welcome.
     if (scan.hasUsableBaseline) {
-      ui.showWelcome(version);
+      ui.showWelcome(version, modelLabel);
     } else {
-      await ui.playIntro(version);
+      await ui.playIntro(version, modelLabel);
     }
 
     // Run the conversation — this is the whole thing

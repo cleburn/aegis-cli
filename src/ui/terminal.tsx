@@ -39,13 +39,17 @@ const HEADER_RULE_WIDTH = 73;
 
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
-const POWERED_BY = "Claude Opus 4.7";
 const UPDATE_COMMAND = "npm install -g aegis-cli@latest";
 
-const COMMANDS: Array<{ name: string; description: string }> = [
+const CLI_COMMANDS: Array<{ name: string; description: string }> = [
   { name: "aegis init", description: "generate or update .agentpolicy/ for this project" },
   { name: "aegis explain", description: "plain-language summary of the current policy" },
   { name: "aegis validate", description: "check .agentpolicy/ files against the schemas" },
+];
+
+const SESSION_COMMANDS: Array<{ name: string; description: string }> = [
+  { name: "/model", description: "switch models during this discovery session" },
+  { name: "/exit", description: "leave the session without writing changes" },
 ];
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -56,7 +60,7 @@ type ConversationItem =
   | { type: "heading"; message: string }
   | { type: "highlight"; message: string }
   | { type: "command"; message: string }
-  | { type: "intro"; mode: "full" | "quiet"; version: string }
+  | { type: "intro"; mode: "full" | "quiet"; version: string; poweredBy: string }
   | { type: "files"; files: string[] }
   | { type: "visual"; content: string }
   | { type: "error"; message: string };
@@ -188,9 +192,11 @@ function UserTurn({ message }: { message: string }) {
 function BannerHeader({
   version,
   mode,
+  poweredBy,
 }: {
   version: string;
   mode: "full" | "quiet";
+  poweredBy: string;
 }) {
   if (mode === "quiet") {
     return (
@@ -203,6 +209,11 @@ function BannerHeader({
           </Text>
           <Text>{" "}</Text>
           <Text dimColor>{`v${version} · welcome back`}</Text>
+        </Box>
+        <Box>
+          <Text>{"  "}</Text>
+          <Text dimColor>{"powered by "}</Text>
+          <Text>{poweredBy}</Text>
         </Box>
         <Text>{" "}</Text>
       </Box>
@@ -262,7 +273,7 @@ function BannerHeader({
       <Box>
         <Text>{"    "}</Text>
         <Text dimColor>{"powered by".padEnd(labelWidth)}</Text>
-        <Text>{POWERED_BY}</Text>
+        <Text>{poweredBy}</Text>
       </Box>
       <Box>
         <Text>{"    "}</Text>
@@ -274,8 +285,17 @@ function BannerHeader({
       <Text>{" "}</Text>
 
       {/* Commands reference */}
-      <Text color="#5B8DEF" bold>{"  commands:"}</Text>
-      {COMMANDS.map((cmd, i) => (
+      <Text color="#5B8DEF" bold>{"  cli commands:"}</Text>
+      {CLI_COMMANDS.map((cmd, i) => (
+        <Box key={i}>
+          <Text>{"    "}</Text>
+          <Text color="#FFD700">{cmd.name.padEnd(16)}</Text>
+          <Text dimColor>{cmd.description}</Text>
+        </Box>
+      ))}
+      <Text>{" "}</Text>
+      <Text color="#5B8DEF" bold>{"  session commands:"}</Text>
+      {SESSION_COMMANDS.map((cmd, i) => (
         <Box key={i}>
           <Text>{"    "}</Text>
           <Text color="#FFD700">{cmd.name.padEnd(16)}</Text>
@@ -452,7 +472,14 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
             case "user":
               return <UserTurn key={index} message={item.message} />;
             case "intro":
-              return <BannerHeader key={index} version={item.version} mode={item.mode} />;
+              return (
+                <BannerHeader
+                  key={index}
+                  version={item.version}
+                  mode={item.mode}
+                  poweredBy={item.poweredBy}
+                />
+              );
             case "note":
               return (
                 <Box key={index} flexDirection="column">
@@ -590,14 +617,14 @@ export class TerminalUI {
 
   // ── Intro Sequence ───────────────────────────────────────────────
 
-  async playIntro(version: string): Promise<void> {
+  async playIntro(version: string, poweredBy: string): Promise<void> {
     this.ensureRendered();
-    this.bridge.addToHistory({ type: "intro", mode: "full", version });
+    this.bridge.addToHistory({ type: "intro", mode: "full", version, poweredBy });
   }
 
-  showWelcome(version: string): void {
+  showWelcome(version: string, poweredBy: string): void {
     this.ensureRendered();
-    this.bridge.addToHistory({ type: "intro", mode: "quiet", version });
+    this.bridge.addToHistory({ type: "intro", mode: "quiet", version, poweredBy });
   }
 
   // ── Conversation ─────────────────────────────────────────────────

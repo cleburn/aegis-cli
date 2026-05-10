@@ -36,6 +36,18 @@ export const MODEL_OPTIONS = [
 
 export type ModelOption = typeof MODEL_OPTIONS[number];
 
+export function modelLabelForProvider(
+  provider: ProviderId,
+  configuredModel?: string
+): string {
+  const model = configuredModel ?? defaultModelForProvider(provider);
+  const option = MODEL_OPTIONS.find((candidate) => {
+    if (provider === "custom") return candidate.provider === "custom";
+    return candidate.provider === provider && candidate.model === model;
+  });
+  return option?.label ?? model;
+}
+
 export function defaultModelForProvider(provider: ProviderId): string {
   return MODEL_IDS[provider][0];
 }

@@ -4,6 +4,7 @@ import {
   type ActiveProviderConfig,
 } from "../config/api-key.js";
 import {
+  confirmProviderForInit,
   hasUsableActiveProvider,
   runProviderInstallFlow,
 } from "./install.js";
@@ -16,7 +17,12 @@ import {
   DeepSeekProvider,
   OpenAIProvider,
 } from "./openai-compatible.js";
-import { resolveModelForProvider } from "./models.js";
+import { modelLabelForProvider, resolveModelForProvider } from "./models.js";
+
+export type CreatedProvider = {
+  provider: LLMProvider;
+  modelLabel: string;
+};
 
 export async function createActiveProvider(): Promise<LLMProvider> {
   let active = getActiveProviderConfig();
@@ -24,6 +30,18 @@ export async function createActiveProvider(): Promise<LLMProvider> {
     active = await runProviderInstallFlow();
   }
 
+  return providerFromActive(active);
+}
+
+export async function createInitProvider(): Promise<CreatedProvider> {
+  const active = await confirmProviderForInit();
+  return {
+    provider: providerFromActive(active),
+    modelLabel: modelLabelForProvider(active.provider, active.model),
+  };
+}
+
+function providerFromActive(active: ActiveProviderConfig): LLMProvider {
   const model = resolveModelForProvider(active.provider, active.model);
 
   switch (active.provider) {
