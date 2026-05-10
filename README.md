@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/npm/v/aegis-cli?style=flat&label=npm" alt="npm version" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat" alt="License: MIT" />
-  <img src="https://img.shields.io/badge/node-%3E%3D22-green?style=flat" alt="Node.js >= 22" />
+  <img src="https://img.shields.io/badge/node-%3E%3D22.3.0-green?style=flat" alt="Node.js >= 22.3.0" />
 </p>
 
 <p align="center">
@@ -108,7 +108,7 @@ Three artifacts, one governance framework:
 
 ## Requirements
 
-- Node.js 22+
+- Node.js >= 22.3.0
 - An [Anthropic API key](https://console.anthropic.com/)
 
 On first run, Aegis will prompt for your API key and store it locally.
