@@ -356,7 +356,7 @@ export class DiscoveryEngine {
     const announcement =
       `Switched to ${modelLabel}. Soft reset: the conversation history is preserved, and this model will read the earlier turns on the next response even though it did not author them.`;
     this.ui.showAegisMessage(announcement);
-    this.messages.push({ role: "assistant", content: announcement });
+    this.messages.push({ role: "user", content: `[system] ${announcement}` });
   }
 
   /**

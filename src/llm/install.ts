@@ -21,9 +21,16 @@ import {
 
 type InstallResult = "saved" | "pick-again";
 type ModelSelection = { option: ModelOption; keepCurrent: boolean };
+type SelectModelOptions = {
+  current?: ActiveProviderConfig;
+  emptyCancels?: boolean;
+};
 export type ModelSwitchResult =
   | { switched: true; active: ActiveProviderConfig }
   | { switched: false };
+
+const CHOOSE_MODEL_HEADER = "  Choose the model Aegis should use.";
+const KEEPING_CURRENT_MODEL_MESSAGE = "  Keeping the current model.\n";
 
 export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
@@ -34,10 +41,10 @@ export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
 
 export async function runProviderInstallFlow(): Promise<ActiveProviderConfig> {
   console.log("");
-  console.log("  Choose the model Aegis should use.");
+  console.log(CHOOSE_MODEL_HEADER);
 
   while (true) {
-    const option = await selectModel();
+    const { option } = await selectModel();
     const result = await configureAndValidate(option, { preferStored: false });
     if (result === "saved") {
       return getActiveProviderConfig();
@@ -53,9 +60,9 @@ export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
 
   console.log("");
   if (!hasCurrentModel(active)) {
-    console.log("  Choose the model Aegis should use.");
+    console.log(CHOOSE_MODEL_HEADER);
     while (true) {
-      const option = await selectModel();
+      const { option } = await selectModel();
       const result = await configureAndValidate(option, {
         preferStored: true,
       });
@@ -68,7 +75,7 @@ export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
   console.log("  Confirm the model Aegis should use for this session.");
 
   while (true) {
-    const selection = await selectModel(active);
+    const selection = await selectModel({ current: active });
     if (selection.keepCurrent) {
       return active;
     }
@@ -87,9 +94,12 @@ export async function runModelSwitchFlow(): Promise<ModelSwitchResult> {
   console.log("  Choose a model for the rest of this session.");
 
   while (true) {
-    const selection = await selectModel(active, { emptyCancels: true });
+    const selection = await selectModel({
+      current: active,
+      emptyCancels: true,
+    });
     if (selection.keepCurrent) {
-      console.log("  Keeping the current model.\n");
+      console.log(KEEPING_CURRENT_MODEL_MESSAGE);
       return { switched: false };
     }
 
@@ -101,22 +111,16 @@ export async function runModelSwitchFlow(): Promise<ModelSwitchResult> {
       return { switched: true, active: getActiveProviderConfig() };
     }
     if (result === "canceled") {
-      console.log("  Keeping the current model.\n");
+      console.log(KEEPING_CURRENT_MODEL_MESSAGE);
       return { switched: false };
     }
   }
 }
 
-async function selectModel(): Promise<ModelOption>;
-async function selectModel(current: ActiveProviderConfig): Promise<ModelSelection>;
 async function selectModel(
-  current: ActiveProviderConfig,
-  options: { emptyCancels?: boolean }
-): Promise<ModelSelection>;
-async function selectModel(
-  current?: ActiveProviderConfig,
-  options: { emptyCancels?: boolean } = {}
-): Promise<ModelOption | ModelSelection> {
+  options: SelectModelOptions = {}
+): Promise<ModelSelection> {
+  const current = options.current;
   const currentIndex = current ? currentModelIndex(current) : -1;
   console.log("");
   MODEL_OPTIONS.forEach((option, index) => {
@@ -126,9 +130,14 @@ async function selectModel(
   console.log("");
 
   while (true) {
+    const emptyAction = options.emptyCancels
+      ? "cancel"
+      : currentIndex >= 0
+        ? "keep current"
+        : null;
     const raw = await prompt(
-      currentIndex >= 0
-        ? `  Select a model by number, or press Enter to ${options.emptyCancels ? "cancel" : "keep current"}: `
+      emptyAction
+        ? `  Select a model by number, or press Enter to ${emptyAction}: `
         : "  Select a model by number: "
     );
     if (!raw && current && options.emptyCancels) {
@@ -149,13 +158,23 @@ async function selectModel(
 
     const selected = Number(raw);
     if (Number.isInteger(selected) && selected >= 1 && selected <= MODEL_OPTIONS.length) {
-      return current
-        ? { option: MODEL_OPTIONS[selected - 1], keepCurrent: false }
-        : MODEL_OPTIONS[selected - 1];
+      const option = MODEL_OPTIONS[selected - 1];
+      return {
+        option,
+        keepCurrent: current ? optionIsCurrent(current, option) : false,
+      };
     }
 
     console.log(`  Enter a number from 1 to ${MODEL_OPTIONS.length}.`);
   }
+}
+
+function optionIsCurrent(
+  active: ActiveProviderConfig,
+  option: ModelOption
+): boolean {
+  if (active.provider === "custom") return option.provider === "custom";
+  return option.provider === active.provider && option.model === active.model;
 }
 
 async function configureAndValidate(
