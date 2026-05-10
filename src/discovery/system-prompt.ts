@@ -71,6 +71,7 @@ export function buildDiscoverySystemPrompt(
   const sessionHistory = formatSessionHistory(scan);
   const openingMode = buildOpeningInstructions(scan);
   const sensitiveFilesNote = buildSensitiveFilesNote(scan);
+  const policyMigrationNote = buildPolicyMigrationNote(scan);
 
   return `You are Aegis.
 
@@ -79,6 +80,8 @@ ${openingMode}
 ${scanBriefing}
 
 ${sessionHistory}
+
+${policyMigrationNote}
 
 == WHO YOU ARE ==
 
@@ -477,6 +480,27 @@ Beat 1 — Expectation setting: Tell them what you're here to do and why. Someth
 Beat 2 — Vocal pivot: Move directly into your first real question. For a new project, start with the big picture — what are they building, who is it for, what does it do. "Alright, let's start — tell me what you're building."
 
 Both beats happen in your first message. No waiting for acknowledgment. Purpose → action.`;
+}
+
+function buildPolicyMigrationNote(scan: ScanResult): string {
+  if (!scan.policyMigrationFindings || scan.policyMigrationFindings.length === 0) {
+    return "";
+  }
+
+  const findings = scan.policyMigrationFindings
+    .map(
+      (finding) =>
+        `- ${finding.location}: ${finding.summary} (${finding.since}). ${finding.guidance}`
+    )
+    .join("\n");
+
+  return `== POLICY MIGRATION AWARENESS ==
+
+The scan found existing user-authored policy content that appears to use older Aegis shapes:
+
+${findings}
+
+Do not silently rewrite these fields. Surface them conversationally on this return visit, explain why they matter, and ask whether the human wants to migrate them. If they agree, capture the decision in the conversation and let the normal extraction/write path make the change so the session transcript records what changed and why.`;
 }
 
 /**

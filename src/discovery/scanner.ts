@@ -12,6 +12,10 @@ import {
   ROLE_SCHEMA,
 } from "../policy/manifest.js";
 import { validateAgainstSchema } from "../policy/validator.js";
+import {
+  detectPolicyDeprecations,
+  type PolicyMigrationFinding,
+} from "../policy/deprecations.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -86,6 +90,8 @@ export interface ScanResult {
   existingPolicyFiles: string[];
   /** Contents of existing .agentpolicy files */
   existingPolicyContents: FileContent[];
+  /** User-authored policy shapes that need conversational migration */
+  policyMigrationFindings: PolicyMigrationFinding[];
   /** Transcripts from prior Aegis sessions */
   existingSessionTranscripts: FileContent[];
   /** Raw package.json data if found */
@@ -1002,6 +1008,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const hasExistingPolicy = fs.existsSync(policyDir);
   let existingPolicyFiles: string[] = [];
   const existingPolicyContents: FileContent[] = [];
+  let policyMigrationFindings: PolicyMigrationFinding[] = [];
   let hasUsableBaseline = false;
 
   if (hasExistingPolicy) {
@@ -1229,6 +1236,9 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       c.path.startsWith(`.agentpolicy/${ROLES_DIR_RELATIVE}/`)
     );
     hasUsableBaseline = allEnumeratedLoaded && allFloorLoaded && hasRole;
+    if (hasUsableBaseline) {
+      policyMigrationFindings = detectPolicyDeprecations(existingPolicyContents);
+    }
   }
 
   // ── Session transcripts ──────────────────────────────────────────
@@ -1517,6 +1527,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     hasUsableBaseline,
     existingPolicyFiles,
     existingPolicyContents,
+    policyMigrationFindings,
     existingSessionTranscripts,
     packageJson: pkg,
     scripts,
@@ -1686,6 +1697,17 @@ export function formatScanBriefing(scan: ScanResult): string {
     for (const file of scan.existingPolicyContents) {
       lines.push(`--- ${file.path} ---`);
       lines.push(file.content);
+      lines.push("");
+    }
+
+    if (scan.policyMigrationFindings.length > 0) {
+      lines.push("== POLICY MIGRATION FINDINGS ==");
+      lines.push("");
+      for (const finding of scan.policyMigrationFindings) {
+        lines.push(`- ${finding.location}: ${finding.summary}`);
+        lines.push(`  Since: ${finding.since}`);
+        lines.push(`  Guidance: ${finding.guidance}`);
+      }
       lines.push("");
     }
   } else if (scan.hasExistingPolicy) {
