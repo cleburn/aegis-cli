@@ -21,6 +21,9 @@ import {
 
 type InstallResult = "saved" | "pick-again";
 type ModelSelection = { option: ModelOption; keepCurrent: boolean };
+export type ModelSwitchResult =
+  | { switched: true; active: ActiveProviderConfig }
+  | { switched: false };
 
 export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
@@ -78,10 +81,41 @@ export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
   }
 }
 
+export async function runModelSwitchFlow(): Promise<ModelSwitchResult> {
+  const active = getActiveProviderConfig();
+  console.log("");
+  console.log("  Choose a model for the rest of this session.");
+
+  while (true) {
+    const selection = await selectModel(active, { emptyCancels: true });
+    if (selection.keepCurrent) {
+      console.log("  Keeping the current model.\n");
+      return { switched: false };
+    }
+
+    const result = await configureAndValidate(selection.option, {
+      preferStored: true,
+      cancelReturns: true,
+    });
+    if (result === "saved") {
+      return { switched: true, active: getActiveProviderConfig() };
+    }
+    if (result === "canceled") {
+      console.log("  Keeping the current model.\n");
+      return { switched: false };
+    }
+  }
+}
+
 async function selectModel(): Promise<ModelOption>;
 async function selectModel(current: ActiveProviderConfig): Promise<ModelSelection>;
 async function selectModel(
-  current?: ActiveProviderConfig
+  current: ActiveProviderConfig,
+  options: { emptyCancels?: boolean }
+): Promise<ModelSelection>;
+async function selectModel(
+  current?: ActiveProviderConfig,
+  options: { emptyCancels?: boolean } = {}
 ): Promise<ModelOption | ModelSelection> {
   const currentIndex = current ? currentModelIndex(current) : -1;
   console.log("");
@@ -94,11 +128,20 @@ async function selectModel(
   while (true) {
     const raw = await prompt(
       currentIndex >= 0
-        ? "  Select a model by number, or press Enter to keep current: "
+        ? `  Select a model by number, or press Enter to ${options.emptyCancels ? "cancel" : "keep current"}: `
         : "  Select a model by number: "
     );
+    if (!raw && current && options.emptyCancels) {
+      const option = currentIndex >= 0
+        ? MODEL_OPTIONS[currentIndex]
+        : MODEL_OPTIONS[0];
+      return { option, keepCurrent: true };
+    }
     if (!raw && current && currentIndex >= 0) {
-      return { option: MODEL_OPTIONS[currentIndex], keepCurrent: true };
+      return {
+        option: MODEL_OPTIONS[currentIndex],
+        keepCurrent: true,
+      };
     }
     if (!raw) {
       throw new AegisExit(130, "Model selection canceled.");
@@ -117,11 +160,18 @@ async function selectModel(
 
 async function configureAndValidate(
   option: ModelOption,
-  options: { preferStored: boolean }
-): Promise<InstallResult> {
+  options: { preferStored: boolean; cancelReturns?: boolean }
+): Promise<InstallResult | "canceled"> {
   let input = options.preferStored ? inputFromStoredConfig(option) : null;
   while (true) {
-    input ??= await promptForConfig(option);
+    try {
+      input ??= await promptForConfig(option);
+    } catch (err) {
+      if (options.cancelReturns && err instanceof AegisExit) {
+        return "canceled";
+      }
+      throw err;
+    }
     const provider = providerFromInput(input);
 
     while (true) {
@@ -156,6 +206,9 @@ async function configureAndValidate(
       }
       if (recovery === "pick-again") {
         return "pick-again";
+      }
+      if (options.cancelReturns) {
+        return "canceled";
       }
       throw new AegisExit(130, "Provider setup canceled.");
     }
@@ -276,7 +329,7 @@ function inputFromStoredConfig(option: ModelOption): ProviderConfigInput | null 
       provider: "custom",
       baseUrl: stored.baseUrl,
       ...(stored.apiKey ? { apiKey: stored.apiKey } : {}),
-      model: stored.model ?? option.model,
+      model: stored.model,
     };
   }
 

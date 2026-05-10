@@ -30,18 +30,18 @@ export async function createActiveProvider(): Promise<LLMProvider> {
     active = await runProviderInstallFlow();
   }
 
-  return providerFromActive(active);
+  return createProviderFromActive(active);
 }
 
 export async function createInitProvider(): Promise<CreatedProvider> {
   const active = await confirmProviderForInit();
   return {
-    provider: providerFromActive(active),
+    provider: createProviderFromActive(active),
     modelLabel: modelLabelForProvider(active.provider, active.model),
   };
 }
 
-function providerFromActive(active: ActiveProviderConfig): LLMProvider {
+export function createProviderFromActive(active: ActiveProviderConfig): LLMProvider {
   const model = resolveModelForProvider(active.provider, active.model);
 
   switch (active.provider) {

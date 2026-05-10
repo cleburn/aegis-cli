@@ -31,6 +31,9 @@ import { policyReadRegexAlternatives } from "../policy/manifest.js";
 import { repoHasRealSource } from "./scanner.js";
 import { AegisExit } from "../abort.js";
 import type { TerminalUI } from "../ui/terminal.js";
+import { runModelSwitchFlow } from "../llm/install.js";
+import { createProviderFromActive } from "../llm/factory.js";
+import { modelLabelForProvider } from "../llm/models.js";
 
 /** Maximum chained [READ_FILE: …] requests per single user turn. */
 const MAX_READ_DEPTH = 5;
@@ -185,6 +188,11 @@ export class DiscoveryEngine {
         );
       }
 
+      if (userInput.toLowerCase() === "/model") {
+        await this.switchModel();
+        continue;
+      }
+
       if (userInput.trim() === "") {
         continue;
       }
@@ -331,6 +339,24 @@ export class DiscoveryEngine {
       }
 
     }
+  }
+
+  private async switchModel(): Promise<void> {
+    const result = await runModelSwitchFlow();
+    if (!result.switched) {
+      this.ui.showNote("Model unchanged.");
+      return;
+    }
+
+    this.provider = createProviderFromActive(result.active);
+    const modelLabel = modelLabelForProvider(
+      result.active.provider,
+      result.active.model
+    );
+    const announcement =
+      `Switched to ${modelLabel}. Soft reset: the conversation history is preserved, and this model will read the earlier turns on the next response even though it did not author them.`;
+    this.ui.showAegisMessage(announcement);
+    this.messages.push({ role: "assistant", content: announcement });
   }
 
   /**
