@@ -16,6 +16,7 @@
     "build": "rm -rf dist && tsc && mkdir -p dist/src/schemas && cp src/schemas/*.json dist/src/schemas/",
     "prepublishOnly": "npm run build",
     "dev": "tsx bin/aegis.ts",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
