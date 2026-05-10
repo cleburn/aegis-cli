@@ -15,8 +15,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { resolveApiKey } from "../config/api-key.js";
-import { AnthropicProvider } from "../llm/anthropic.js";
+import { createActiveProvider } from "../llm/factory.js";
 import { scanRepo } from "../discovery/scanner.js";
 import { DiscoveryEngine } from "../discovery/engine.js";
 import {
@@ -146,10 +145,7 @@ export async function initCommand(): Promise<void> {
   }
 
   try {
-    // Resolve API key (this may prompt interactively — that's fine,
-    // it's a one-time setup moment, not a recurring UI pattern)
-    const apiKey = await resolveApiKey();
-    const provider = new AnthropicProvider(apiKey);
+    const provider = await createActiveProvider();
 
     // Validate API key quietly. The provider distinguishes auth
     // failure (the API rejected the key) from transport failure
@@ -169,12 +165,12 @@ export async function initCommand(): Promise<void> {
       if (validation.reason === "auth") {
         throw new AegisExit(
           1,
-          "Anthropic rejected that API key as invalid. Check that you copied it correctly and try again."
+          `${provider.name} rejected that API key as invalid. Check that you copied it correctly and try again.`
         );
       }
       throw new AegisExit(
         1,
-        `Couldn't verify your API key with Anthropic${
+        `Couldn't verify your API key with ${provider.name}${
           validation.detail ? ` — ${validation.detail}` : ""
         }. Your key isn't being rejected; the request just didn't complete. Try again in a moment.`
       );

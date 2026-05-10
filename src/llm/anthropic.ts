@@ -5,17 +5,23 @@ import type {
   ProviderValidateResult,
 } from "./provider.js";
 import { MaxTokensError } from "./provider.js";
-
-const MODEL = "claude-opus-4-7";
-const MAX_TOKENS = 16384;
-const MAX_TOKENS_JSON = 128000;
+import {
+  classifyProviderError,
+  MAX_TOKENS,
+  MAX_TOKENS_JSON,
+  parseJSONResponse,
+  truncationNote,
+} from "./common.js";
+import { defaultModelForProvider } from "./models.js";
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "Anthropic";
   private client: Anthropic;
+  private model: string;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, model: string = defaultModelForProvider("anthropic")) {
     this.client = new Anthropic({ apiKey });
+    this.model = model;
   }
 
   async chat(
@@ -24,7 +30,7 @@ export class AnthropicProvider implements LLMProvider {
     maxTokens: number = MAX_TOKENS
   ): Promise<string> {
     const response = await this.client.messages.create({
-      model: MODEL,
+      model: this.model,
       max_tokens: maxTokens,
       system: systemPrompt,
       messages: messages.map((m) => ({
@@ -48,7 +54,7 @@ export class AnthropicProvider implements LLMProvider {
     onToken: (token: string) => void
   ): Promise<string> {
     const stream = this.client.messages.stream({
-      model: MODEL,
+      model: this.model,
       max_tokens: MAX_TOKENS,
       system: systemPrompt,
       messages: messages.map((m) => ({
@@ -92,10 +98,9 @@ export class AnthropicProvider implements LLMProvider {
     // signal of what happened). The note is plain text, not a
     // control marker, so engine.ts's drainBuffer leaves it alone.
     if (stopReason === "max_tokens") {
-      const truncationNote =
-        "\n\n[Aegis note: this response was cut off at the model's max_tokens limit. Tell me how to continue or what to skip.]";
-      full += truncationNote;
-      onToken(truncationNote);
+      const note = truncationNote();
+      full += note;
+      onToken(note);
     }
 
     return full;
@@ -103,20 +108,22 @@ export class AnthropicProvider implements LLMProvider {
 
   async chatJSON<T = unknown>(
     messages: Message[],
-    systemPrompt: string
+    systemPrompt: string,
+    schema?: object
   ): Promise<T> {
     const jsonSystemPrompt = `${systemPrompt}\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation — just the JSON object.`;
 
     // Use streaming internally to avoid API timeout on large responses.
     // The stream collects the full response silently — no token callback needed.
     const stream = this.client.messages.stream({
-      model: MODEL,
+      model: this.model,
       max_tokens: MAX_TOKENS_JSON,
       system: jsonSystemPrompt,
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,
       })),
+      ...(schema ? { format: { type: "json_schema" as const, schema } } : {}),
     });
 
     let raw = "";
@@ -155,80 +162,13 @@ export class AnthropicProvider implements LLMProvider {
   async validate(): Promise<ProviderValidateResult> {
     try {
       await this.client.messages.create({
-        model: MODEL,
+        model: this.model,
         max_tokens: 10,
         messages: [{ role: "user", content: "ping" }],
       });
       return { ok: true };
     } catch (err) {
-      // Anthropic SDK errors carry an HTTP status field. 401/403
-      // mean the API rejected the key (auth failure); anything
-      // else (network unreachable, DNS failure, 429 rate limit,
-      // 5xx server error, request timeout) is transport — the
-      // user's key is fine, the call just couldn't complete. The
-      // previous code returned a bare false either way, which led
-      // init.ts to tell the user "Couldn't connect with that API
-      // key" — sending users with valid keys but flaky internet to
-      // retype a key that wasn't the problem. Discriminating here
-      // lets the caller surface the actual cause.
-      if (err && typeof err === "object" && "status" in err) {
-        const status = (err as { status?: number }).status;
-        if (status === 401 || status === 403) {
-          return { ok: false, reason: "auth" };
-        }
-      }
-      const detail =
-        err instanceof Error ? err.message.slice(0, 200) : "unknown error";
-      return { ok: false, reason: "transport", detail };
+      return classifyProviderError(err);
     }
   }
-}
-
-/**
- * Parse a JSON response from the LLM, stripping any markdown fencing
- * or preamble the model might have wrapped around it.
- *
- * Handles:
- * - Leading/trailing whitespace and newlines
- * - ```json ... ``` fences (with or without "json" label)
- * - Leading prose before the JSON object (finds first `{`)
- * - Trailing prose after the JSON object (finds last `}`)
- */
-function parseJSONResponse<T>(raw: string): T {
-  let cleaned = raw.trim();
-
-  // Strip markdown code fences — handle various formats:
-  // ```json\n...\n```, ```\n...\n```, ``` json\n...\n```
-  cleaned = cleaned
-    .replace(/^```\s*(?:json)?\s*\n?/i, "")
-    .replace(/\n?\s*```\s*$/i, "")
-    .trim();
-
-  // If it still doesn't start with { or [, try to find the JSON object
-  if (!cleaned.startsWith("{") && !cleaned.startsWith("[")) {
-    const firstBrace = cleaned.indexOf("{");
-    const firstBracket = cleaned.indexOf("[");
-    const start = firstBrace >= 0 && firstBracket >= 0
-      ? Math.min(firstBrace, firstBracket)
-      : Math.max(firstBrace, firstBracket);
-
-    if (start >= 0) {
-      cleaned = cleaned.slice(start);
-    }
-  }
-
-  // If it has trailing content after the JSON, find the matching close
-  if (cleaned.startsWith("{")) {
-    const lastBrace = cleaned.lastIndexOf("}");
-    if (lastBrace >= 0) {
-      cleaned = cleaned.slice(0, lastBrace + 1);
-    }
-  } else if (cleaned.startsWith("[")) {
-    const lastBracket = cleaned.lastIndexOf("]");
-    if (lastBracket >= 0) {
-      cleaned = cleaned.slice(0, lastBracket + 1);
-    }
-  }
-
-  return JSON.parse(cleaned) as T;
 }

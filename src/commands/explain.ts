@@ -7,16 +7,14 @@
  */
 
 import chalk from "chalk";
-import { resolveApiKey } from "../config/api-key.js";
-import { AnthropicProvider } from "../llm/anthropic.js";
+import { createActiveProvider } from "../llm/factory.js";
 import { explainPolicy } from "../policy/explainer.js";
 
 const AEGIS = chalk.hex("#5B8DEF");
 
 export async function explainCommand(): Promise<void> {
   try {
-    const apiKey = await resolveApiKey();
-    const provider = new AnthropicProvider(apiKey);
+    const provider = await createActiveProvider();
 
     console.log("");
     process.stdout.write(`  ${AEGIS("aegis")}  `);

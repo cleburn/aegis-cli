@@ -22,6 +22,7 @@ export type StandardProviderId = Exclude<ProviderId, "custom">;
 export interface ProviderConfig {
   apiKey?: string;
   baseUrl?: string;
+  model?: string;
 }
 
 export interface AegisConfig {
@@ -31,13 +32,14 @@ export interface AegisConfig {
 }
 
 export type ProviderConfigInput =
-  | { provider: StandardProviderId; apiKey: string }
-  | { provider: "custom"; baseUrl: string; apiKey?: string };
+  | { provider: StandardProviderId; apiKey: string; model?: string }
+  | { provider: "custom"; baseUrl: string; apiKey?: string; model?: string };
 
 export type ActiveProviderConfig = {
   provider: ProviderId;
   apiKey?: string;
   baseUrl?: string;
+  model?: string;
   apiKeySource: "env" | "config" | "missing";
   envVar: string;
 };
@@ -74,9 +76,11 @@ function providerConfigEquals(a: unknown, b: ProviderConfig | undefined): boolea
   if (!isRecord(a)) return b === undefined;
   const apiKey = a.apiKey;
   const baseUrl = a.baseUrl;
+  const model = a.model;
   return (
     (typeof apiKey === "string" ? apiKey : undefined) === b?.apiKey &&
-    (typeof baseUrl === "string" ? baseUrl : undefined) === b?.baseUrl
+    (typeof baseUrl === "string" ? baseUrl : undefined) === b?.baseUrl &&
+    (typeof model === "string" ? model : undefined) === b?.model
   );
 }
 
@@ -119,13 +123,18 @@ function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean 
 
       const apiKey = entry.apiKey;
       const baseUrl = entry.baseUrl;
+      const model = entry.model;
       if (provider === "custom") {
         providers.custom = {
           ...(typeof apiKey === "string" ? { apiKey } : {}),
           ...(typeof baseUrl === "string" ? { baseUrl } : {}),
+          ...(typeof model === "string" ? { model } : {}),
         };
       } else if (typeof apiKey === "string") {
-        providers[provider] = { apiKey };
+        providers[provider] = {
+          apiKey,
+          ...(typeof model === "string" ? { model } : {}),
+        };
       }
     }
   } else {
@@ -209,6 +218,7 @@ export function getActiveProviderConfig(): ActiveProviderConfig {
     provider,
     ...(apiKey ? { apiKey } : {}),
     ...(provider === "custom" && stored.baseUrl ? { baseUrl: stored.baseUrl } : {}),
+    ...(stored.model ? { model: stored.model } : {}),
     apiKeySource: envKey ? "env" : stored.apiKey ? "config" : "missing",
     envVar,
   };
@@ -224,8 +234,12 @@ export function saveProviderConfig(
       ? {
           baseUrl: input.baseUrl,
           ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+          ...(input.model ? { model: input.model } : {}),
         }
-      : { apiKey: input.apiKey };
+      : {
+          apiKey: input.apiKey,
+          ...(input.model ? { model: input.model } : {}),
+        };
 
   const next: AegisConfig = {
     version: 1,
