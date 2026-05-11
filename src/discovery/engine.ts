@@ -184,7 +184,7 @@ export class DiscoveryEngine {
       ) {
         throw new AegisExit(
           0,
-          "No worries — your conversation is saved for reference. Pick this up anytime with aegis init."
+          "No worries — exiting without writing policy changes. Pick this up anytime with aegis init."
         );
       }
 

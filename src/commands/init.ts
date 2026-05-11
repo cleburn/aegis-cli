@@ -68,8 +68,8 @@ export async function initCommand(): Promise<void> {
 
   // State referenced from the finally block AND from the SIGINT
   // cleanup callback registered with lock.ts. Both paths converge on
-  // writeFinalTranscript via a once-guard so the audit record is
-  // preserved exactly once regardless of which exit path fires.
+  // writeFinalTranscript via a once-guard so eligible audit records
+  // are preserved exactly once regardless of which exit path fires.
   //
   // policyWriteSucceeded gates the closing-entry shape: result.policy
   // is set as soon as engine.run() returns, but the success branch
@@ -84,6 +84,7 @@ export async function initCommand(): Promise<void> {
   let result: DiscoveryResult | null = null;
   let fileOutcomes: WriteOutcome[] = [];
   let extractionFailed = false;
+  let scanHadAuthoredPolicy = false;
   let policyWriteSucceeded = false;
   let policyWriteError: Error | null = null;
   let transcriptWritten = false;
@@ -104,6 +105,9 @@ export async function initCommand(): Promise<void> {
   const writeFinalTranscript = (): void => {
     if (transcriptWritten || !engine) return;
     transcriptWritten = true;
+    if (!shouldWriteRepoTranscript(scanHadAuthoredPolicy, policyWriteSucceeded)) {
+      return;
+    }
     try {
       const entries = buildTranscriptEntries(
         engine,
@@ -149,6 +153,7 @@ export async function initCommand(): Promise<void> {
 
     // Scan the repo quietly — Aegis does his homework before the meeting
     const scan = await scanRepo(cwd);
+    scanHadAuthoredPolicy = scan.hasAuthoredPolicy;
 
     // First-time init: play the full intro sequence
     // Return visit (usable baseline on disk): quiet welcome
@@ -228,7 +233,9 @@ export async function initCommand(): Promise<void> {
       // the session is not a success and should not pretend to be one.
       extractionFailed = true;
       ui.showNote(
-        "Session transcript will still be saved for reference. Run aegis init again when you're ready to retry."
+        scanHadAuthoredPolicy
+          ? "Session transcript will still be saved for reference. Run aegis init again when you're ready to retry."
+          : "No policy files were written. Run aegis init again when you're ready to retry."
       );
     }
 
@@ -281,20 +288,20 @@ export async function initCommand(): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    // Persist the transcript FIRST so an exception during writePolicy,
-    // a Ctrl+C during the post-completion loop, or any caught error
-    // above does not lose the audit record. The cleanup callback
-    // registered with lock.ts will fire on the SIGINT / SIGTERM /
-    // 'exit' paths that bypass this finally block; the once-guard
-    // makes the second call a no-op so the transcript is written
-    // exactly once. Lock release happens AFTER the transcript write
-    // so the rmdir-on-release of .agentpolicy/ correctly fails with
-    // ENOTEMPTY (sessions/ now holds the new transcript) and leaves
-    // the directory in place.
+    // Persist the transcript before releasing the lock only when this
+    // run either started with authored policy or successfully wrote
+    // one. Fresh-project aborts leave the repo untouched.
     writeFinalTranscript();
     if (lockPath) releaseLock(lockPath);
     await ui.destroy();
   }
+}
+
+export function shouldWriteRepoTranscript(
+  scanHadAuthoredPolicy: boolean,
+  policyWriteSucceeded: boolean
+): boolean {
+  return scanHadAuthoredPolicy || policyWriteSucceeded;
 }
 
 /**
