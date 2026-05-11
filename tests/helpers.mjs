@@ -10,7 +10,13 @@ export async function withMockFetch(handlers, fn) {
     if (!handler) {
       throw new Error(`Unexpected fetch call to ${String(input)}`);
     }
-    calls.push({ input, init });
+    const bodyText =
+      typeof init?.body === "string"
+        ? init.body
+        : input instanceof Request
+          ? await input.clone().text()
+          : undefined;
+    calls.push({ input, init, bodyText });
     return handler(input, init);
   };
 
@@ -27,6 +33,11 @@ export function jsonResponse(body, status = 200) {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+export function jsonRequestBody(call) {
+  assert.equal(typeof call.bodyText, "string");
+  return JSON.parse(call.bodyText);
 }
 
 export function sseResponse(events) {

@@ -118,7 +118,7 @@ export class GoogleProvider implements LLMProvider {
       await this.client.models.generateContent({
         model: this.model,
         contents: [{ role: "user", parts: [{ text: "ping" }] }],
-        config: { maxOutputTokens: 10 },
+        config: { maxOutputTokens: 32 },
       });
       return { ok: true };
     } catch (err) {

@@ -7,6 +7,7 @@ import {
   googleResponse,
   googleStream,
   jsonResponse,
+  jsonRequestBody,
   withMockFetch,
 } from "./helpers.mjs";
 
@@ -14,10 +15,12 @@ test("GoogleProvider validates success and auth failure", async () => {
   await withMockFetch([
     () => jsonResponse(googleResponse("pong")),
     () => jsonResponse({ error: { code: 401, message: "bad key" } }, 401),
-  ], async () => {
+  ], async (calls) => {
     const provider = new GoogleProvider("test-key", "gemini-test");
     assert.deepEqual(await provider.validate(), { ok: true });
+    assert.equal(validateMaxOutputTokens(jsonRequestBody(calls[0])), 32);
     assert.deepEqual(await provider.validate(), { ok: false, reason: "auth" });
+    assert.equal(validateMaxOutputTokens(jsonRequestBody(calls[1])), 32);
   });
 });
 
@@ -40,3 +43,9 @@ test("GoogleProvider handles chat, JSON truncation, and stream truncation", asyn
     assert.ok(tokens.some((token) => token.includes(TRUNCATION_NOTE_FRAGMENT)));
   });
 });
+
+function validateMaxOutputTokens(body) {
+  return body.generationConfig?.maxOutputTokens
+    ?? body.config?.maxOutputTokens
+    ?? body.maxOutputTokens;
+}

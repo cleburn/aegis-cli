@@ -44,8 +44,16 @@ export type ActiveProviderConfig = {
   envVar: string;
 };
 
+type HiddenInputUpdate = {
+  input: string;
+  submitted: boolean;
+  canceled: boolean;
+};
+
 const DEFAULT_PROVIDER: ProviderId = "anthropic";
 const LEGACY_API_KEY_FIELD = ["anthropic", "api", "key"].join("_");
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
 
 const PROVIDER_ENV_VARS: Record<ProviderId, string> = {
   anthropic: "ANTHROPIC_API_KEY",
@@ -279,8 +287,8 @@ export function prompt(question: string, hidden = false): Promise<string> {
     });
 
     if (hidden) {
-      // Mask input for API keys
       process.stdout.write(question);
+      process.stdout.write("(input hidden - paste your key and press Enter)\n");
       const stdin = process.stdin;
       const wasRaw = stdin.isRaw;
       if (stdin.isTTY) {
@@ -299,26 +307,19 @@ export function prompt(question: string, hidden = false): Promise<string> {
         rl.close();
       };
       const onData = (char: Buffer) => {
-        const c = char.toString();
-        if (c === "\n" || c === "\r") {
+        const update = applyHiddenInputChunk(input, char.toString());
+        input = update.input;
+        if (update.submitted) {
           teardown();
           process.stdout.write("\n");
           resolve(input);
-        } else if (c === "\u0003") {
+        } else if (update.canceled) {
           // Ctrl+C — restore terminal and abort via typed exit so
           // init's outer handler can do full cleanup (lock release,
           // transcript write if applicable) before the process ends.
           teardown();
           process.stdout.write("\n");
           reject(new AegisExit(130, "API key entry canceled."));
-        } else if (c === "\u007F" || c === "\b") {
-          // Backspace
-          if (input.length > 0) {
-            input = input.slice(0, -1);
-          }
-        } else {
-          input += c;
-          process.stdout.write("•");
         }
       };
       stdin.on("data", onData);
@@ -333,4 +334,36 @@ export function prompt(question: string, hidden = false): Promise<string> {
       });
     }
   });
+}
+
+export function applyHiddenInputChunk(
+  input: string,
+  chunk: string
+): HiddenInputUpdate {
+  let next = input;
+  for (let index = 0; index < chunk.length; index++) {
+    if (chunk.startsWith(BRACKETED_PASTE_START, index)) {
+      index += BRACKETED_PASTE_START.length - 1;
+      continue;
+    }
+    if (chunk.startsWith(BRACKETED_PASTE_END, index)) {
+      index += BRACKETED_PASTE_END.length - 1;
+      continue;
+    }
+
+    const char = chunk[index];
+    if (char === "\n" || char === "\r") {
+      return { input: next, submitted: true, canceled: false };
+    }
+    if (char === "\u0003") {
+      return { input: next, submitted: false, canceled: true };
+    }
+    if (char === "\u007F" || char === "\b") {
+      next = next.slice(0, -1);
+      continue;
+    }
+    next += char;
+  }
+
+  return { input: next, submitted: false, canceled: false };
 }

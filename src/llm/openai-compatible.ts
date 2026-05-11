@@ -249,7 +249,7 @@ export class OpenAIProvider implements LLMProvider {
       await this.client.responses.create({
         model: this.model,
         input: "ping",
-        max_output_tokens: 10,
+        max_output_tokens: 16,
       });
       return { ok: true };
     } catch (err) {

@@ -107,7 +107,7 @@ export class MistralProvider implements LLMProvider {
     try {
       await this.client.chat.complete({
         model: this.model,
-        maxTokens: 10,
+        maxTokens: 32,
         messages: [{ role: "user", content: "ping" }],
       });
       return { ok: true };
