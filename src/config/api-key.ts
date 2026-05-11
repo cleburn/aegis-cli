@@ -324,12 +324,23 @@ export function prompt(question: string, hidden = false): Promise<string> {
       };
       stdin.on("data", onData);
     } else {
-      rl.on("SIGINT", () => {
+      const stdin = process.stdin;
+      const wasRaw = stdin.isRaw;
+      if (stdin.isTTY && wasRaw) {
+        stdin.setRawMode(false);
+      }
+      const teardown = (): void => {
+        if (stdin.isTTY && wasRaw !== undefined) {
+          stdin.setRawMode(wasRaw);
+        }
         rl.close();
+      };
+      rl.on("SIGINT", () => {
+        teardown();
         reject(new AegisExit(130, "Input canceled."));
       });
       rl.question(question, (answer) => {
-        rl.close();
+        teardown();
         resolve(answer.trim());
       });
     }
