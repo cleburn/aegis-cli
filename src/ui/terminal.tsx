@@ -72,6 +72,7 @@ interface AppBridge {
   setIsThinking: (v: boolean) => void;
   setThinkingMode: (mode: "thinking" | "extraction") => void;
   setInputPromptActive: (v: boolean) => void;
+  setInputPaused: (v: boolean) => void;
   resolveInput: ((value: string) => void) | null;
 }
 
@@ -397,8 +398,10 @@ const CURSOR_CHAR = "█";
 
 function InputPrompt({
   bridge,
+  paused,
 }: {
   bridge: AppBridge;
+  paused: boolean;
 }) {
   const [inputText, setInputText] = useState("");
 
@@ -416,7 +419,7 @@ function InputPrompt({
     } else if (!key.ctrl && !key.meta && input) {
       setInputText((t) => t + input);
     }
-  });
+  }, { isActive: !paused });
 
   // Available width for input text + cursor, keeping everything on one line
   const cols = process.stdout.columns || 80;
@@ -450,6 +453,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingMode, setThinkingMode] = useState<"thinking" | "extraction">("thinking");
   const [inputActive, setInputActive] = useState(false);
+  const [inputPaused, setInputPaused] = useState(false);
 
   // Expose state setters to the bridge
   useEffect(() => {
@@ -459,6 +463,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
     bridge.setIsThinking = setIsThinking;
     bridge.setThinkingMode = setThinkingMode;
     bridge.setInputPromptActive = setInputActive;
+    bridge.setInputPaused = setInputPaused;
   }, []);
 
   return (
@@ -556,7 +561,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
       {isThinking && <ThinkingDisplay mode={thinkingMode} />}
 
       {/* Dynamic region — input prompt */}
-      {inputActive && <InputPrompt bridge={bridge} />}
+      {inputActive && <InputPrompt bridge={bridge} paused={inputPaused} />}
     </Box>
   );
 }
@@ -577,6 +582,7 @@ export class TerminalUI {
       setIsThinking: () => {},
       setThinkingMode: () => {},
       setInputPromptActive: () => {},
+      setInputPaused: () => {},
       resolveInput: null,
     };
   }
@@ -664,6 +670,14 @@ export class TerminalUI {
       };
       this.bridge.setInputPromptActive(true);
     });
+  }
+
+  pauseInput(): void {
+    this.bridge.setInputPaused(true);
+  }
+
+  resumeInput(): void {
+    this.bridge.setInputPaused(false);
   }
 
   // ── Thinking ─────────────────────────────────────────────────────
