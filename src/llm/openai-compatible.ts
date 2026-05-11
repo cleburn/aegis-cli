@@ -31,6 +31,7 @@ type OpenAICompatibleOptions = {
 };
 
 const LOCAL_AUTH_PLACEHOLDER = "aegis-local-auth-placeholder";
+const OPENAI_REASONING_NONE = { effort: "none" as const };
 
 export class OpenAICompatibleProvider implements LLMProvider {
   readonly name: string;
@@ -172,6 +173,7 @@ export class OpenAIProvider implements LLMProvider {
       instructions: systemPrompt,
       input: toResponseMessages(messages),
       max_output_tokens: maxTokens,
+      reasoning: OPENAI_REASONING_NONE,
     });
 
     return response.output_text ?? "";
@@ -187,6 +189,7 @@ export class OpenAIProvider implements LLMProvider {
       instructions: systemPrompt,
       input: toResponseMessages(messages),
       max_output_tokens: MAX_TOKENS,
+      reasoning: OPENAI_REASONING_NONE,
       stream: true,
     };
     const stream = await this.client.responses.create(params);
@@ -224,6 +227,7 @@ export class OpenAIProvider implements LLMProvider {
       instructions: jsonSystemPrompt,
       input: toResponseMessages(messages),
       max_output_tokens: MAX_TOKENS_JSON,
+      reasoning: OPENAI_REASONING_NONE,
       text: {
         format: schema
           ? {
@@ -250,6 +254,7 @@ export class OpenAIProvider implements LLMProvider {
         model: this.model,
         input: "ping",
         max_output_tokens: 16,
+        reasoning: OPENAI_REASONING_NONE,
       });
       return { ok: true };
     } catch (err) {

@@ -18,9 +18,9 @@ test("OpenAIProvider validates success and auth failure", async () => {
   ], async (calls) => {
     const provider = new OpenAIProvider("test-key", "gpt-test");
     assert.deepEqual(await provider.validate(), { ok: true });
-    assert.equal(jsonRequestBody(calls[0]).max_output_tokens, 16);
+    assertOpenAIRequest(jsonRequestBody(calls[0]), { maxOutputTokens: 16 });
     assert.deepEqual(await provider.validate(), { ok: false, reason: "auth" });
-    assert.equal(jsonRequestBody(calls[1]).max_output_tokens, 16);
+    assertOpenAIRequest(jsonRequestBody(calls[1]), { maxOutputTokens: 16 });
   });
 });
 
@@ -29,17 +29,25 @@ test("OpenAIProvider handles chat, JSON truncation, and stream truncation", asyn
     () => jsonResponse(openAIResponse("hello")),
     () => jsonResponse(openAIResponse("{", "max_output_tokens")),
     () => openAIResponseStream("partial"),
-  ], async () => {
+  ], async (calls) => {
     const provider = new OpenAIProvider("test-key", "gpt-test");
     assert.equal(await provider.chat([{ role: "system", content: "note" }, { role: "user", content: "hi" }], "system"), "hello");
+    assertOpenAIRequest(jsonRequestBody(calls[0]), { maxOutputTokens: 16384 });
     await assert.rejects(
       () => provider.chatJSON([{ role: "user", content: "json" }], "system"),
       MaxTokensError
     );
+    assertOpenAIRequest(jsonRequestBody(calls[1]), { maxOutputTokens: 128000 });
     const tokens = [];
     const full = await provider.chatStream([{ role: "user", content: "stream" }], "system", (token) => tokens.push(token));
+    assertOpenAIRequest(jsonRequestBody(calls[2]), { maxOutputTokens: 16384 });
     assert.match(full, /partial/);
     assert.match(full, new RegExp(TRUNCATION_NOTE_FRAGMENT));
     assert.ok(tokens.some((token) => token.includes(TRUNCATION_NOTE_FRAGMENT)));
   });
 });
+
+function assertOpenAIRequest(body, { maxOutputTokens }) {
+  assert.equal(body.max_output_tokens, maxOutputTokens);
+  assert.deepEqual(body.reasoning, { effort: "none" });
+}
