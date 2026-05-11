@@ -72,6 +72,8 @@ export interface ScanResult {
   configFiles: string[];
   /** Whether .agentpolicy/ already exists */
   hasExistingPolicy: boolean;
+  /** Whether .agentpolicy/ contains canonical user-authored policy files */
+  hasAuthoredPolicy: boolean;
   /**
    * Whether the on-disk .agentpolicy/ provides a baseline downstream
    * code can rely on as a return-visit starting point. True iff the
@@ -1006,6 +1008,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   // ── Existing policy ──────────────────────────────────────────────
   const policyDir = path.join(projectRoot, ".agentpolicy");
   const hasExistingPolicy = fs.existsSync(policyDir);
+  let hasAuthoredPolicy = false;
   let existingPolicyFiles: string[] = [];
   const existingPolicyContents: FileContent[] = [];
   let policyMigrationFindings: PolicyMigrationFinding[] = [];
@@ -1026,13 +1029,20 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       const fixedPresent = POLICY_FLOOR_PATHS.filter((rel) =>
         fs.existsSync(path.join(policyDir, rel))
       );
+      let roleFiles: string[] = [];
       // Sort role files alphabetically so the prompt ordering is
       // deterministic across filesystems and across runs. glob's
       // internal order is implementation-dependent (readdir order on
       // most systems, which varies by filesystem and inode layout);
       // sorting here gives a stable briefing for prompt-cache hits
       // and human-readable diffs across sessions.
-      const roleFiles = glob.sync(ROLES_GLOB, { cwd: policyDir }).sort();
+      try {
+        roleFiles = glob.sync(ROLES_GLOB, { cwd: policyDir }).sort();
+      } catch {
+        // Fixed floor files are still enough to distinguish authored
+        // partial policy from Aegis-only scaffolding.
+      }
+      hasAuthoredPolicy = fixedPresent.length > 0 || roleFiles.length > 0;
       // Order: non-ledger floor files, then role files, then the
       // ledger last. Pull the ledger path from the manifest so a
       // future spec change that renames or moves the ledger doesn't
@@ -1347,7 +1357,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
   const fileContents: FileContent[] = [];
   const skippedSensitiveFiles: string[] = [];
 
-  if (hasExistingPolicy) {
+  if (hasAuthoredPolicy) {
     // Return visit — only read high-value files for lightweight project
     // context alongside the policy files. Respect ignore rules: if a
     // user explicitly ignored README.md or package.json, we don't leak
@@ -1524,6 +1534,7 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     directoryTree,
     configFiles,
     hasExistingPolicy,
+    hasAuthoredPolicy,
     hasUsableBaseline,
     existingPolicyFiles,
     existingPolicyContents,
@@ -1559,11 +1570,11 @@ export function formatScanBriefing(scan: ScanResult): string {
   // prompt so the model doesn't claim knowledge it lacks or believe
   // claims the briefing makes about itself. Three return-visit
   // subcases matter because hasExistingPolicy only says the directory
-  // exists — a present-but-empty, partially-loaded, or unreadable
-  // .agentpolicy/ must not be described as "policy contents loaded"
-  // in the prompt. hasUsableBaseline is the single gate: true iff
-  // the full spec floor (constitution + governance + ledger + at
-  // least one role) all loaded as non-empty parseable JSON.
+  // exists — a transcript-only .agentpolicy/ is fresh-project context,
+  // while a directory with canonical authored files but no usable
+  // baseline is a recovery case. hasUsableBaseline is the strongest
+  // gate: true iff the full spec floor (constitution + governance +
+  // ledger + at least one role) all loaded as non-empty parseable JSON.
   const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
 
   if (scan.hasUsableBaseline) {
@@ -1583,7 +1594,7 @@ export function formatScanBriefing(scan: ScanResult): string {
     lines.push(
       `Scan mode: return visit — focused read of ${scopeList}. The rest of the repo is not part of this prompt's context unless you and the user discuss it.`
     );
-  } else if (scan.hasExistingPolicy) {
+  } else if (scan.hasAuthoredPolicy) {
     const transcriptNote =
       transcriptCount > 0
         ? ` ${transcriptCount} prior session transcript(s) did load.`
@@ -1710,7 +1721,7 @@ export function formatScanBriefing(scan: ScanResult): string {
       }
       lines.push("");
     }
-  } else if (scan.hasExistingPolicy) {
+  } else if (scan.hasAuthoredPolicy) {
     lines.push("");
     lines.push(
       `⚠ Existing .agentpolicy/ found but no usable baseline loaded. Files seen on disk: ${scan.existingPolicyFiles.join(", ") || "(none enumerated)"}`

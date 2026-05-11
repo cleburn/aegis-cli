@@ -20,6 +20,7 @@ function baseScan(migrationFindings = []) {
     directoryTree: {},
     configFiles: [],
     hasExistingPolicy: true,
+    hasAuthoredPolicy: true,
     hasUsableBaseline: true,
     existingPolicyFiles: ["constitution.json", "governance.json", "roles/default.json", "state/ledger.json"],
     existingPolicyContents: [],

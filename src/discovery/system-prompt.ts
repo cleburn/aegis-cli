@@ -264,7 +264,7 @@ function buildOpeningInstructions(
   scan: ScanResult
 ): string {
   // ── Return visit ─────────────────────────────────────────────────
-  if (scan.hasExistingPolicy) {
+  if (scan.hasAuthoredPolicy) {
     const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
 
     // Return visit with no usable baseline — the directory exists
