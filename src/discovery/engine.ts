@@ -342,13 +342,7 @@ export class DiscoveryEngine {
   }
 
   private async switchModel(): Promise<void> {
-    this.ui.pauseInput();
-    let result: Awaited<ReturnType<typeof runModelSwitchFlow>>;
-    try {
-      result = await runModelSwitchFlow();
-    } finally {
-      this.ui.resumeInput();
-    }
+    const result = await runModelSwitchFlow(this.ui);
     if (!result.switched) {
       this.ui.showNote("Model unchanged.");
       return;

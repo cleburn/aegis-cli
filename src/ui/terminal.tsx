@@ -65,6 +65,16 @@ type ConversationItem =
   | { type: "visual"; content: string }
   | { type: "error"; message: string };
 
+type MenuResult = { index: number } | { canceled: true };
+
+type MenuRequest = {
+  title: string;
+  options: Array<{ label: string; current?: boolean }>;
+  allowCancel?: boolean;
+  cancelLabel?: string;
+  resolve: (result: MenuResult) => void;
+};
+
 interface AppBridge {
   addToHistory: (item: ConversationItem) => void;
   setStreamBuffer: (text: string) => void;
@@ -72,7 +82,7 @@ interface AppBridge {
   setIsThinking: (v: boolean) => void;
   setThinkingMode: (mode: "thinking" | "extraction") => void;
   setInputPromptActive: (v: boolean) => void;
-  setInputPaused: (v: boolean) => void;
+  setMenuRequest: (request: MenuRequest | null) => void;
   resolveInput: ((value: string) => void) | null;
 }
 
@@ -396,13 +406,7 @@ function StreamingResponse({ text }: { text: string }) {
 const INPUT_PREFIX_WIDTH = stringWidth("  ▎ you    ");
 const CURSOR_CHAR = "█";
 
-function InputPrompt({
-  bridge,
-  paused,
-}: {
-  bridge: AppBridge;
-  paused: boolean;
-}) {
+function InputPrompt({ bridge }: { bridge: AppBridge }) {
   const [inputText, setInputText] = useState("");
 
   useInput((input, key) => {
@@ -419,7 +423,7 @@ function InputPrompt({
     } else if (!key.ctrl && !key.meta && input) {
       setInputText((t) => t + input);
     }
-  }, { isActive: !paused });
+  });
 
   // Available width for input text + cursor, keeping everything on one line
   const cols = process.stdout.columns || 80;
@@ -444,6 +448,81 @@ function InputPrompt({
   );
 }
 
+function MenuPrompt({ request }: { request: MenuRequest }) {
+  const [inputText, setInputText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const finish = (result: MenuResult) => {
+    setInputText("");
+    setError(null);
+    request.resolve(result);
+  };
+
+  useInput((input, key) => {
+    if (key.escape && request.allowCancel) {
+      finish({ canceled: true });
+      return;
+    }
+    if (key.return) {
+      const raw = inputText.trim();
+      if (!raw && request.allowCancel) {
+        finish({ canceled: true });
+        return;
+      }
+      const selected = Number(raw);
+      if (
+        Number.isInteger(selected) &&
+        selected >= 1 &&
+        selected <= request.options.length
+      ) {
+        finish({ index: selected - 1 });
+        return;
+      }
+      setError(`Enter a number from 1 to ${request.options.length}.`);
+      return;
+    }
+    if (key.backspace || key.delete) {
+      setInputText((text) => text.slice(0, -1));
+      setError(null);
+      return;
+    }
+    if (!key.ctrl && !key.meta && input) {
+      setInputText((text) => text + input);
+      setError(null);
+    }
+  });
+
+  const cancelHint = request.allowCancel
+    ? `, or ${request.cancelLabel ?? "press Enter to cancel"}`
+    : "";
+
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      <Text>{" "}</Text>
+      <Text color="#5B8DEF" bold>{`  ${request.title}`}</Text>
+      <Text>{" "}</Text>
+      {request.options.map((option, index) => (
+        <Box key={index}>
+          <Text>{"  "}</Text>
+          <Text color="#FFD700">{`${index + 1}. `.padStart(4)}</Text>
+          <Text>{option.label}</Text>
+          {option.current && <Text dimColor>{" (current)"}</Text>}
+        </Box>
+      ))}
+      <Text>{" "}</Text>
+      <Box>
+        <Text color="#A8D8A8">{"  Select a model by number"}</Text>
+        <Text dimColor>{cancelHint}</Text>
+        <Text>{": "}</Text>
+        <Text>{inputText}</Text>
+        <Text color="#5B8DEF">{CURSOR_CHAR}</Text>
+      </Box>
+      {error && <Text dimColor>{`  ${error}`}</Text>}
+      <Text>{" "}</Text>
+    </Box>
+  );
+}
+
 // ── Main App Component ─────────────────────────────────────────────
 
 function AegisApp({ bridge }: { bridge: AppBridge }) {
@@ -453,7 +532,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingMode, setThinkingMode] = useState<"thinking" | "extraction">("thinking");
   const [inputActive, setInputActive] = useState(false);
-  const [inputPaused, setInputPaused] = useState(false);
+  const [menuRequest, setMenuRequest] = useState<MenuRequest | null>(null);
 
   // Expose state setters to the bridge
   useEffect(() => {
@@ -463,7 +542,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
     bridge.setIsThinking = setIsThinking;
     bridge.setThinkingMode = setThinkingMode;
     bridge.setInputPromptActive = setInputActive;
-    bridge.setInputPaused = setInputPaused;
+    bridge.setMenuRequest = setMenuRequest;
   }, []);
 
   return (
@@ -561,7 +640,10 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
       {isThinking && <ThinkingDisplay mode={thinkingMode} />}
 
       {/* Dynamic region — input prompt */}
-      {inputActive && <InputPrompt bridge={bridge} paused={inputPaused} />}
+      {inputActive && <InputPrompt bridge={bridge} />}
+
+      {/* Dynamic region — model menu */}
+      {menuRequest && <MenuPrompt request={menuRequest} />}
     </Box>
   );
 }
@@ -582,7 +664,7 @@ export class TerminalUI {
       setIsThinking: () => {},
       setThinkingMode: () => {},
       setInputPromptActive: () => {},
-      setInputPaused: () => {},
+      setMenuRequest: () => {},
       resolveInput: null,
     };
   }
@@ -672,12 +754,22 @@ export class TerminalUI {
     });
   }
 
-  pauseInput(): void {
-    this.bridge.setInputPaused(true);
-  }
-
-  resumeInput(): void {
-    this.bridge.setInputPaused(false);
+  async selectFromMenu(input: {
+    title: string;
+    options: Array<{ label: string; current?: boolean }>;
+    allowCancel?: boolean;
+    cancelLabel?: string;
+  }): Promise<MenuResult> {
+    this.ensureRendered();
+    return new Promise((resolve) => {
+      this.bridge.setMenuRequest({
+        ...input,
+        resolve: (result) => {
+          this.bridge.setMenuRequest(null);
+          resolve(result);
+        },
+      });
+    });
   }
 
   // ── Thinking ─────────────────────────────────────────────────────

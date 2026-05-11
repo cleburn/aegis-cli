@@ -9,6 +9,7 @@ import {
 } from "./openai-compatible.js";
 import type { LLMProvider, ProviderValidateResult } from "./provider.js";
 import { MODEL_OPTIONS, type ModelOption } from "./models.js";
+import type { TerminalUI } from "../ui/terminal.js";
 import {
   getActiveProviderConfig,
   getProviderEnvVar,
@@ -31,7 +32,6 @@ export type ModelSwitchResult =
   | { switched: false };
 
 const CHOOSE_MODEL_HEADER = "  Choose the model Aegis should use.";
-const KEEPING_CURRENT_MODEL_MESSAGE = "  Keeping the current model.\n";
 
 export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
@@ -89,33 +89,67 @@ export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
   }
 }
 
-export async function runModelSwitchFlow(): Promise<ModelSwitchResult> {
+export async function runModelSwitchFlow(
+  ui: TerminalUI
+): Promise<ModelSwitchResult> {
   const active = getActiveProviderConfig();
-  console.log("");
-  console.log("  Choose a model for the rest of this session.");
-
-  while (true) {
-    const selection = await selectModel({
-      current: active,
-      emptyCancels: true,
-    });
-    if (selection.keepCurrent) {
-      console.log(KEEPING_CURRENT_MODEL_MESSAGE);
-      return { switched: false };
-    }
-
-    const result = await configureAndValidate(selection.option, {
-      preferStored: true,
-      cancelReturns: true,
-    });
-    if (result === "saved") {
-      return { switched: true, active: getActiveProviderConfig() };
-    }
-    if (result === "canceled") {
-      console.log(KEEPING_CURRENT_MODEL_MESSAGE);
-      return { switched: false };
-    }
+  const selection = await selectModelInSession(ui, active);
+  if (selection.keepCurrent) {
+    ui.showNote("Keeping the current model.");
+    return { switched: false };
   }
+
+  const input = inputFromStoredConfig(selection.option);
+  if (!input) {
+    ui.showNote(
+      `${selection.option.label} isn't configured yet. /exit and run aegis init to set up credentials for a new provider.`
+    );
+    return { switched: false };
+  }
+
+  const provider = providerFromInput(input);
+  ui.showNote(`Verifying ${selection.option.label}...`);
+  const validation = await provider.validate();
+  if (!validation.ok) {
+    const detail = validation.detail ? ` - ${validation.detail}` : "";
+    const reason =
+      validation.reason === "auth"
+        ? `${provider.name} rejected the configured credentials`
+        : `Couldn't verify with ${provider.name}${detail}`;
+    ui.showNote(`${reason}. Staying on the current model.`);
+    return { switched: false };
+  }
+
+  saveProviderConfig(input);
+  return { switched: true, active: getActiveProviderConfig() };
+}
+
+async function selectModelInSession(
+  ui: TerminalUI,
+  active: ActiveProviderConfig
+): Promise<ModelSelection> {
+  const currentIndex = currentModelIndex(active);
+  const result = await ui.selectFromMenu({
+    title: "Choose a model for the rest of this session.",
+    options: MODEL_OPTIONS.map((option, index) => ({
+      label: option.label,
+      current: index === currentIndex,
+    })),
+    allowCancel: true,
+    cancelLabel: "press Enter or Esc to cancel",
+  });
+
+  if ("canceled" in result) {
+    const option =
+      currentIndex >= 0 ? MODEL_OPTIONS[currentIndex] : MODEL_OPTIONS[0];
+    return { option, keepCurrent: true };
+  }
+
+  const option = MODEL_OPTIONS[result.index];
+  return {
+    option,
+    keepCurrent: optionIsCurrent(active, option),
+  };
 }
 
 async function selectModel(
