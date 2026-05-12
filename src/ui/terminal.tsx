@@ -24,7 +24,13 @@ import {
   SHIELD_PULSE_FRAMES,
   THINKING_ANIMATIONS,
 } from "./art.js";
-import { CLI_COMMANDS, SESSION_COMMANDS } from "./commands.js";
+import {
+  CLI_COMMANDS,
+  DISCOVERY_COMMANDS,
+  getSlashCommandGhost,
+  type SlashCommand,
+  SESSION_COMMANDS,
+} from "./commands.js";
 
 // ── Color Palette (same as before) ─────────────────────────────────
 const AEGIS_COLOR = chalk.hex("#5B8DEF");
@@ -50,7 +56,7 @@ type ConversationItem =
   | { type: "heading"; message: string }
   | { type: "highlight"; message: string }
   | { type: "command"; message: string }
-  | { type: "intro"; mode: "full" | "quiet"; version: string; poweredBy: string }
+  | { type: "intro"; version: string; poweredBy: string }
   | { type: "files"; files: string[] }
   | { type: "visual"; content: string }
   | { type: "error"; message: string };
@@ -72,6 +78,7 @@ interface AppBridge {
   setIsThinking: (v: boolean) => void;
   setThinkingMode: (mode: "thinking" | "extraction") => void;
   setInputPromptActive: (v: boolean) => void;
+  setInputCommands: (commands: readonly SlashCommand[]) => void;
   setMenuRequest: (request: MenuRequest | null) => void;
   resolveInput: ((value: string) => void) | null;
 }
@@ -177,50 +184,15 @@ function UserTurn({ message }: { message: string }) {
 // ── Banner Header ──────────────────────────────────────────────────
 //
 // Renders the wordmark, tagline, metadata block (version, attribution,
-// update hint), and command reference at the top of the conversation.
-//
-// Two render modes:
-//   - "full" (first-time init): full splash — wordmark + tagline +
-//     metadata block + commands reference. The user is meeting Aegis
-//     for the first time; the splash earns its keep.
-//   - "quiet" (return visit): compact one-line acknowledgment with
-//     the version. The user knows what Aegis is on a return visit;
-//     the full splash repeats information they already have. The
-//     update check at startup (bin/aegis.ts) already surfaces a
-//     newer version on stderr if one exists, so the metadata block's
-//     update line isn't load-bearing here.
+// update hint), and command reference at the top of every init session.
 
 function BannerHeader({
   version,
-  mode,
   poweredBy,
 }: {
   version: string;
-  mode: "full" | "quiet";
   poweredBy: string;
 }) {
-  if (mode === "quiet") {
-    return (
-      <Box flexDirection="column">
-        <Text>{" "}</Text>
-        <Box>
-          <Text>{"  "}</Text>
-          <Text color="#5B8DEF" bold>
-            {"Aegis"}
-          </Text>
-          <Text>{" "}</Text>
-          <Text dimColor>{`v${version} · welcome back`}</Text>
-        </Box>
-        <Box>
-          <Text>{"  "}</Text>
-          <Text dimColor>{"powered by "}</Text>
-          <Text>{poweredBy}</Text>
-        </Box>
-        <Text>{" "}</Text>
-      </Box>
-    );
-  }
-
   const logoLines = AEGIS_LOGO.split("\n");
   const rule = "─".repeat(HEADER_RULE_WIDTH);
   const labelWidth = 14; // pad labels so values align in a column
@@ -396,7 +368,13 @@ function StreamingResponse({ text }: { text: string }) {
 const INPUT_PREFIX_WIDTH = stringWidth("  ▎ you    ");
 const CURSOR_CHAR = "█";
 
-function InputPrompt({ bridge }: { bridge: AppBridge }) {
+function InputPrompt({
+  bridge,
+  commands,
+}: {
+  bridge: AppBridge;
+  commands: readonly SlashCommand[];
+}) {
   const [inputText, setInputText] = useState("");
 
   useInput((input, key) => {
@@ -417,22 +395,28 @@ function InputPrompt({ bridge }: { bridge: AppBridge }) {
 
   // Available width for input text + cursor, keeping everything on one line
   const cols = process.stdout.columns || 80;
-  const availableWidth = cols - INPUT_PREFIX_WIDTH - stringWidth(CURSOR_CHAR);
+  const availableWidth = Math.max(10, cols - INPUT_PREFIX_WIDTH);
+  const inputWidth = Math.max(1, availableWidth - stringWidth(CURSOR_CHAR));
   const textWidth = stringWidth(inputText);
   // If text exceeds available space, show only the tail end
   const visibleText =
-    textWidth <= availableWidth
+    textWidth <= inputWidth
       ? inputText
-      : inputText.slice(inputText.length - availableWidth);
+      : inputText.slice(inputText.length - inputWidth);
+  const ghost = getSlashCommandGhost(inputText, commands);
+  const ghostText = ghost
+    ? `${ghost.continuation} - ${ghost.description}`
+    : "";
 
   return (
     <Box paddingLeft={2}>
       <Text color="#A8D8A8">▎ </Text>
       <Text color="#A8D8A8">you  </Text>
       <Text>{"  "}</Text>
-      <Box overflow="hidden" width={availableWidth + stringWidth(CURSOR_CHAR)}>
+      <Box overflow="hidden" width={availableWidth}>
         <Text>{visibleText}</Text>
         <Text color="#5B8DEF">{CURSOR_CHAR}</Text>
+        {ghostText && <Text dimColor>{ghostText}</Text>}
       </Box>
     </Box>
   );
@@ -522,6 +506,8 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingMode, setThinkingMode] = useState<"thinking" | "extraction">("thinking");
   const [inputActive, setInputActive] = useState(false);
+  const [inputCommands, setInputCommands] =
+    useState<readonly SlashCommand[]>(DISCOVERY_COMMANDS);
   const [menuRequest, setMenuRequest] = useState<MenuRequest | null>(null);
 
   // Expose state setters to the bridge
@@ -532,6 +518,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
     bridge.setIsThinking = setIsThinking;
     bridge.setThinkingMode = setThinkingMode;
     bridge.setInputPromptActive = setInputActive;
+    bridge.setInputCommands = setInputCommands;
     bridge.setMenuRequest = setMenuRequest;
   }, []);
 
@@ -550,7 +537,6 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
                 <BannerHeader
                   key={index}
                   version={item.version}
-                  mode={item.mode}
                   poweredBy={item.poweredBy}
                 />
               );
@@ -630,7 +616,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
       {isThinking && <ThinkingDisplay mode={thinkingMode} />}
 
       {/* Dynamic region — input prompt */}
-      {inputActive && <InputPrompt bridge={bridge} />}
+      {inputActive && <InputPrompt bridge={bridge} commands={inputCommands} />}
 
       {/* Dynamic region — model menu */}
       {menuRequest && <MenuPrompt request={menuRequest} />}
@@ -654,6 +640,7 @@ export class TerminalUI {
       setIsThinking: () => {},
       setThinkingMode: () => {},
       setInputPromptActive: () => {},
+      setInputCommands: () => {},
       setMenuRequest: () => {},
       resolveInput: null,
     };
@@ -697,12 +684,7 @@ export class TerminalUI {
 
   async playIntro(version: string, poweredBy: string): Promise<void> {
     this.ensureRendered();
-    this.bridge.addToHistory({ type: "intro", mode: "full", version, poweredBy });
-  }
-
-  showWelcome(version: string, poweredBy: string): void {
-    this.ensureRendered();
-    this.bridge.addToHistory({ type: "intro", mode: "quiet", version, poweredBy });
+    this.bridge.addToHistory({ type: "intro", version, poweredBy });
   }
 
   // ── Conversation ─────────────────────────────────────────────────
@@ -731,9 +713,12 @@ export class TerminalUI {
     this.streamBuffer = "";
   }
 
-  async getUserInput(): Promise<string> {
+  async getUserInput(
+    commands: readonly SlashCommand[] = DISCOVERY_COMMANDS
+  ): Promise<string> {
     this.ensureRendered();
     return new Promise((resolve) => {
+      this.bridge.setInputCommands(commands);
       this.bridge.resolveInput = (value: string) => {
         if (value.trim().length > 0) {
           this.bridge.addToHistory({ type: "user", message: value });

@@ -5,7 +5,7 @@
  * with the human, and produces the .agentpolicy/ directory.
  *
  * First-time: Logo wordmark → conversation → files appear.
- * Return visit: Short opener → conversation → files updated (or unchanged).
+ * Return visit: Logo wordmark → short opener → files updated (or unchanged).
  *
  * The scan happens quietly before the first message. The policy
  * gets written quietly after the last one. In between, it's
@@ -160,22 +160,7 @@ export async function initCommand(): Promise<void> {
     const scan = await scanRepo(cwd);
     scanHadAuthoredPolicy = scan.hasAuthoredPolicy;
 
-    // First-time init: play the full intro sequence
-    // Return visit (usable baseline on disk): quiet welcome
-    //
-    // Gate on hasUsableBaseline rather than hasExistingPolicy so a
-    // stray empty `.agentpolicy/` directory (left by a Ctrl+C during
-    // API-key resolution on a prior aborted init, or by a mid-write
-    // failure of writePolicy) does not greet the user as a return
-    // visitor. The full intro plays whenever the on-disk state is
-    // not actually a usable starting point — partial baselines, empty
-    // dirs, malformed JSON all route through here instead of the
-    // return-visit welcome.
-    if (scan.hasUsableBaseline) {
-      ui.showWelcome(version, modelLabel);
-    } else {
-      await ui.playIntro(version, modelLabel);
-    }
+    await ui.playIntro(version, modelLabel);
 
     // Run the conversation — this is the whole thing
     engine = new DiscoveryEngine(provider, scan, ui);
@@ -542,7 +527,7 @@ async function runPostCompletionLoop(
   );
 
   while (true) {
-    const input = await ui.getUserInput();
+    const input = await ui.getUserInput(POST_COMPLETION_COMMANDS);
     if (handlePostCompletionSlashCommand(input, ui)) {
       return;
     }

@@ -7,6 +7,10 @@ export type SlashCommandMatch =
   | { command: SlashCommand; expanded: boolean }
   | null;
 
+export type SlashCommandGhost =
+  | { command: SlashCommand; continuation: string; description: string }
+  | null;
+
 export const CLI_COMMANDS: readonly SlashCommand[] = [
   { name: "aegis init", description: "generate or update .agentpolicy/ for this project" },
   { name: "aegis explain", description: "plain-language summary of the current policy" },
@@ -59,4 +63,24 @@ export function resolveSlashCommand(
 
 export function formatSlashCommandMatch(command: SlashCommand): string {
   return `Matched ${command.name} - ${command.description}.`;
+}
+
+export function getSlashCommandGhost(
+  input: string,
+  commands: readonly SlashCommand[]
+): SlashCommandGhost {
+  if (!input.startsWith("/")) return null;
+
+  const normalized = input.toLowerCase();
+  const matches = commands.filter((command) =>
+    command.name.toLowerCase().startsWith(normalized)
+  );
+  if (matches.length !== 1) return null;
+
+  const command = matches[0];
+  return {
+    command,
+    continuation: command.name.slice(input.length),
+    description: command.description,
+  };
 }
