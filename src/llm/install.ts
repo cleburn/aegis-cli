@@ -9,6 +9,10 @@ import {
 import type { LLMProvider, ProviderValidateResult } from "./provider.js";
 import { MODEL_OPTIONS, type ModelOption } from "./models.js";
 import {
+  discoverLocalModels,
+  type LocalModelDiscovery,
+} from "./local-discovery.js";
+import {
   hasGoogleOAuthTokens,
   runGoogleOAuthFlow,
 } from "./google-oauth.js";
@@ -18,7 +22,7 @@ import {
   getGoogleApiKeyEnvConflicts,
   getProviderEnvVar,
   getProviderEnvValue,
-  prompt,
+  prompt as readPrompt,
   readConfig,
   saveProviderConfig,
   type ActiveProviderConfig,
@@ -36,6 +40,21 @@ export type ModelSwitchResult =
   | { switched: false };
 
 const CHOOSE_MODEL_HEADER = "  Choose the model Aegis should use.";
+
+export type PromptFn = (
+  question: string,
+  hidden?: boolean
+) => Promise<string>;
+
+let prompt: PromptFn = readPrompt;
+
+export function setInstallPromptForTests(nextPrompt: PromptFn): () => void {
+  const previous = prompt;
+  prompt = nextPrompt;
+  return () => {
+    prompt = previous;
+  };
+}
 
 export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
@@ -135,6 +154,15 @@ export async function runModelSwitchFlow(
 
   const input = inputFromStoredConfig(selection.option);
   if (!input) {
+    if (selection.option.provider === "custom") {
+      const result = await configureAndValidate(selection.option, {
+        preferStored: false,
+        cancelReturns: true,
+      });
+      return result === "saved"
+        ? { switched: true, active: getActiveProviderConfig() }
+        : { switched: false };
+    }
     ui.showNote(
       `${selection.option.label} isn't configured yet. /exit and run aegis init to set up credentials for a new provider.`
     );
@@ -321,23 +349,7 @@ function hasCurrentModel(active: ActiveProviderConfig): boolean {
 
 async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput> {
   if (option.provider === "custom") {
-    const baseUrl = (await prompt("  Local server base URL: ")).trim();
-    if (!baseUrl) {
-      throw new AegisExit(130, "Local model server base URL is required.");
-    }
-
-    const model = (await prompt("  Local model ID: ")).trim();
-    if (!model) {
-      throw new AegisExit(130, "Local model ID is required.");
-    }
-
-    const apiKey = (await prompt("  API key, if your local server requires one (optional): ", true)).trim();
-    return {
-      provider: "custom",
-      baseUrl,
-      ...(apiKey ? { apiKey } : {}),
-      model,
-    };
+    return promptForLocalModelConfig();
   }
   if (option.provider === "google") {
     return promptForGoogleConfig(option);
@@ -354,6 +366,74 @@ async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput
     provider: option.provider,
     apiKey,
     model: option.model,
+  };
+}
+
+export async function promptForLocalModelConfig(): Promise<ProviderConfigInput> {
+  const discovered = await discoverLocalModels();
+  if (discovered.length === 0) {
+    console.log(
+      "  No local models found on Ollama, LM Studio, llama.cpp, or vLLM. Start a local server to enable auto-discovery, or enter details manually."
+    );
+    return promptForManualLocalModelConfig();
+  }
+
+  console.log("");
+  console.log("  Found local models:");
+  discovered.forEach((model, index) => {
+    console.log(`  ${index + 1}. ${model.source}: ${model.model}`);
+  });
+  const manualIndex = discovered.length + 1;
+  console.log(`  ${manualIndex}. Enter URL manually`);
+  console.log("");
+
+  while (true) {
+    const raw = await prompt("  Select a local model by number: ");
+    if (!raw) {
+      throw new AegisExit(130, "Local model selection canceled.");
+    }
+    const selected = Number(raw);
+    if (
+      Number.isInteger(selected) &&
+      selected >= 1 &&
+      selected <= discovered.length
+    ) {
+      return providerInputFromDiscoveredModel(discovered[selected - 1]);
+    }
+    if (selected === manualIndex) {
+      return promptForManualLocalModelConfig();
+    }
+    console.log(`  Enter a number from 1 to ${manualIndex}.`);
+  }
+}
+
+function providerInputFromDiscoveredModel(
+  model: LocalModelDiscovery
+): ProviderConfigInput {
+  return {
+    provider: "custom",
+    baseUrl: model.baseUrl,
+    model: model.model,
+  };
+}
+
+async function promptForManualLocalModelConfig(): Promise<ProviderConfigInput> {
+  const baseUrl = (await prompt("  Local server base URL: ")).trim();
+  if (!baseUrl) {
+    throw new AegisExit(130, "Local model server base URL is required.");
+  }
+
+  const model = (await prompt("  Local model ID: ")).trim();
+  if (!model) {
+    throw new AegisExit(130, "Local model ID is required.");
+  }
+
+  const apiKey = (await prompt("  API key, if your local server requires one (optional): ", true)).trim();
+  return {
+    provider: "custom",
+    baseUrl,
+    ...(apiKey ? { apiKey } : {}),
+    model,
   };
 }
 
