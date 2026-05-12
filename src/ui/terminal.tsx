@@ -24,6 +24,7 @@ import {
   SHIELD_PULSE_FRAMES,
   THINKING_ANIMATIONS,
 } from "./art.js";
+import { CLI_COMMANDS, SESSION_COMMANDS } from "./commands.js";
 
 // ── Color Palette (same as before) ─────────────────────────────────
 const AEGIS_COLOR = chalk.hex("#5B8DEF");
@@ -40,17 +41,6 @@ const HEADER_RULE_WIDTH = 73;
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
 const UPDATE_COMMAND = "npm install -g aegis-cli@latest";
-
-const CLI_COMMANDS: Array<{ name: string; description: string }> = [
-  { name: "aegis init", description: "generate or update .agentpolicy/ for this project" },
-  { name: "aegis explain", description: "plain-language summary of the current policy" },
-  { name: "aegis validate", description: "check .agentpolicy/ files against the schemas" },
-];
-
-const SESSION_COMMANDS: Array<{ name: string; description: string }> = [
-  { name: "/model", description: "switch models during this discovery session" },
-  { name: "/exit", description: "leave the session without writing changes" },
-];
 
 // ── Types ──────────────────────────────────────────────────────────
 type ConversationItem =

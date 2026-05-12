@@ -34,6 +34,11 @@ import type { TerminalUI } from "../ui/terminal.js";
 import { runModelSwitchFlow } from "../llm/install.js";
 import { createProviderFromActive } from "../llm/factory.js";
 import { modelLabelForProvider } from "../llm/models.js";
+import {
+  DISCOVERY_COMMANDS,
+  formatSlashCommandMatch,
+  resolveSlashCommand,
+} from "../ui/commands.js";
 
 /** Maximum chained [READ_FILE: …] requests per single user turn. */
 const MAX_READ_DEPTH = 5;
@@ -179,17 +184,12 @@ export class DiscoveryEngine {
       // transcript persistence — see initCommand's writeFinalTranscript).
       // A bare process.exit here would bypass all of that.
       if (
-        userInput.toLowerCase() === "/quit" ||
-        userInput.toLowerCase() === "/exit"
+        await handleDiscoverySlashCommand(
+          userInput,
+          this.ui,
+          () => this.switchModel()
+        )
       ) {
-        throw new AegisExit(
-          0,
-          "No worries — exiting without writing policy changes. Pick this up anytime with aegis init."
-        );
-      }
-
-      if (userInput.toLowerCase() === "/model") {
-        await this.switchModel();
         continue;
       }
 
@@ -957,6 +957,33 @@ export class DiscoveryEngine {
 
     return sections.join("\n");
   }
+}
+
+export async function handleDiscoverySlashCommand(
+  input: string,
+  ui: Pick<TerminalUI, "showNote">,
+  switchModel: () => Promise<void>
+): Promise<boolean> {
+  const command = resolveSlashCommand(input, DISCOVERY_COMMANDS);
+  if (!command) return false;
+
+  if (command.expanded) {
+    ui.showNote(formatSlashCommandMatch(command.command));
+  }
+  if (
+    command.command.name === "/quit" ||
+    command.command.name === "/exit"
+  ) {
+    throw new AegisExit(
+      0,
+      "No worries — exiting without writing policy changes. Pick this up anytime with aegis init."
+    );
+  }
+  if (command.command.name === "/model") {
+    await switchModel();
+  }
+
+  return true;
 }
 
 /**

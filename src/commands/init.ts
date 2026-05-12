@@ -33,6 +33,11 @@ import {
 } from "../policy/lock.js";
 import { AegisExit } from "../abort.js";
 import { TerminalUI } from "../ui/terminal.js";
+import {
+  formatSlashCommandMatch,
+  POST_COMPLETION_COMMANDS,
+  resolveSlashCommand,
+} from "../ui/commands.js";
 import type { DiscoveryResult } from "../discovery/engine.js";
 
 // Read version from package.json so the banner stays in sync with
@@ -538,23 +543,38 @@ async function runPostCompletionLoop(
 
   while (true) {
     const input = await ui.getUserInput();
-    const normalized = input.trim().toLowerCase();
-
-    if (
-      normalized === "/exit" ||
-      normalized === "/quit" ||
-      normalized === "/done"
-    ) {
-      ui.showNote("Session closed. See you next time.");
+    if (handlePostCompletionSlashCommand(input, ui)) {
       return;
     }
 
-    if (normalized === "") {
+    if (input.trim() === "") {
       continue;
     }
 
     await engine.continueConversation(input, mode);
   }
+}
+
+export function handlePostCompletionSlashCommand(
+  input: string,
+  ui: Pick<TerminalUI, "showNote">
+): boolean {
+  const command = resolveSlashCommand(input, POST_COMPLETION_COMMANDS);
+  if (!command) return false;
+
+  if (command.expanded) {
+    ui.showNote(formatSlashCommandMatch(command.command));
+  }
+  if (
+    command.command.name === "/exit" ||
+    command.command.name === "/quit" ||
+    command.command.name === "/done"
+  ) {
+    ui.showNote("Session closed. See you next time.");
+    return true;
+  }
+
+  return false;
 }
 
 /**

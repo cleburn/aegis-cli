@@ -56,6 +56,16 @@ type HiddenInputUpdate = {
   submitted: boolean;
   canceled: boolean;
 };
+type HiddenPromptInput = {
+  isTTY?: boolean;
+  isRaw?: boolean;
+  setRawMode?: (mode: boolean) => void;
+  on: (event: "data", listener: (chunk: Buffer) => void) => void;
+  removeListener: (event: "data", listener: (chunk: Buffer) => void) => void;
+};
+type HiddenPromptOutput = {
+  write: (chunk: string) => unknown;
+};
 
 const DEFAULT_PROVIDER: ProviderId = "anthropic";
 const LEGACY_API_KEY_FIELD = ["anthropic", "api", "key"].join("_");
@@ -372,70 +382,79 @@ export function setActiveProvider(provider: ProviderId): AegisConfig {
 }
 
 export function prompt(question: string, hidden = false): Promise<string> {
+  if (hidden) {
+    return promptHiddenInput(question, process.stdin, process.stdout);
+  }
+
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
 
-    if (hidden) {
-      process.stdout.write(question);
-      process.stdout.write("(input hidden - paste your key and press Enter)\n");
-      const stdin = process.stdin;
-      const wasRaw = stdin.isRaw;
-      if (stdin.isTTY) {
-        stdin.setRawMode(true);
-      }
-      let input = "";
-      // Shared cleanup for both success and abort paths so raw mode
-      // and the stdin data listener never leak when the prompt ends.
-      // Without this, a Ctrl+C during the hidden prompt would leave
-      // the shell in raw mode after process.exit.
-      const teardown = (): void => {
-        stdin.removeListener("data", onData);
-        if (stdin.isTTY && wasRaw !== undefined) {
-          stdin.setRawMode(wasRaw);
-        }
-        rl.close();
-      };
-      const onData = (char: Buffer) => {
-        const update = applyHiddenInputChunk(input, char.toString());
-        input = update.input;
-        if (update.submitted) {
-          teardown();
-          process.stdout.write("\n");
-          resolve(input);
-        } else if (update.canceled) {
-          // Ctrl+C — restore terminal and abort via typed exit so
-          // init's outer handler can do full cleanup (lock release,
-          // transcript write if applicable) before the process ends.
-          teardown();
-          process.stdout.write("\n");
-          reject(new AegisExit(130, "API key entry canceled."));
-        }
-      };
-      stdin.on("data", onData);
-    } else {
-      const stdin = process.stdin;
-      const wasRaw = stdin.isRaw;
-      if (stdin.isTTY && wasRaw) {
-        stdin.setRawMode(false);
-      }
-      const teardown = (): void => {
-        if (stdin.isTTY && wasRaw !== undefined) {
-          stdin.setRawMode(wasRaw);
-        }
-        rl.close();
-      };
-      rl.on("SIGINT", () => {
-        teardown();
-        reject(new AegisExit(130, "Input canceled."));
-      });
-      rl.question(question, (answer) => {
-        teardown();
-        resolve(answer.trim());
-      });
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    if (stdin.isTTY && wasRaw) {
+      stdin.setRawMode(false);
     }
+    const teardown = (): void => {
+      if (stdin.isTTY && wasRaw !== undefined) {
+        stdin.setRawMode(wasRaw);
+      }
+      rl.close();
+    };
+    rl.on("SIGINT", () => {
+      teardown();
+      reject(new AegisExit(130, "Input canceled."));
+    });
+    rl.question(question, (answer) => {
+      teardown();
+      resolve(answer.trim());
+    });
+  });
+}
+
+export function promptHiddenInput(
+  question: string,
+  stdin: HiddenPromptInput,
+  stdout: HiddenPromptOutput
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const wasRaw = stdin.isRaw;
+    if (stdin.isTTY) {
+      stdin.setRawMode?.(true);
+    }
+    stdout.write(question);
+    stdout.write("(input hidden - paste your key and press Enter)\n");
+
+    let input = "";
+    // Shared cleanup for both success and abort paths so raw mode
+    // and the stdin data listener never leak when the prompt ends.
+    // Without this, a Ctrl+C during the hidden prompt would leave
+    // the shell in raw mode after process.exit.
+    const teardown = (): void => {
+      stdin.removeListener("data", onData);
+      if (stdin.isTTY && wasRaw !== undefined) {
+        stdin.setRawMode?.(wasRaw);
+      }
+    };
+    const onData = (char: Buffer) => {
+      const update = applyHiddenInputChunk(input, char.toString());
+      input = update.input;
+      if (update.submitted) {
+        teardown();
+        stdout.write("\n");
+        resolve(input);
+      } else if (update.canceled) {
+        // Ctrl+C — restore terminal and abort via typed exit so
+        // init's outer handler can do full cleanup (lock release,
+        // transcript write if applicable) before the process ends.
+        teardown();
+        stdout.write("\n");
+        reject(new AegisExit(130, "API key entry canceled."));
+      }
+    };
+    stdin.on("data", onData);
   });
 }
 
