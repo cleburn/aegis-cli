@@ -156,29 +156,3 @@ export function googleStream(text, finishReason = "MAX_TOKENS") {
     `data: ${JSON.stringify(googleResponse("", finishReason))}\n\n`,
   ]);
 }
-
-export function mistralResponse(content, finishReason = "stop") {
-  return {
-    id: "mistral-test",
-    object: "chat.completion",
-    created: 1,
-    model: "test-model",
-    choices: [
-      {
-        index: 0,
-        message: { role: "assistant", content },
-        finish_reason: finishReason,
-        finishReason,
-      },
-    ],
-    usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-  };
-}
-
-export function mistralStream(text, finishReason = "length") {
-  return sseResponse([
-    `data: ${JSON.stringify({ id: "mistral-stream", model: "test-model", choices: [{ index: 0, delta: { content: text }, finish_reason: null, finishReason: null }] })}\n\n`,
-    `data: ${JSON.stringify({ id: "mistral-stream", model: "test-model", choices: [{ index: 0, delta: {}, finish_reason: finishReason, finishReason }] })}\n\n`,
-    "data: [DONE]\n\n",
-  ]);
-}

@@ -11,7 +11,6 @@ import {
 import type { LLMProvider } from "./provider.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { GoogleProvider } from "./google.js";
-import { MistralProvider } from "./mistral.js";
 import {
   CustomProvider,
   DeepSeekProvider,
@@ -55,8 +54,6 @@ export function createProviderFromActive(active: ActiveProviderConfig): LLMProvi
         : new GoogleProvider(requireApiKey(active), model);
     case "deepseek":
       return new DeepSeekProvider(requireApiKey(active), model);
-    case "mistral":
-      return new MistralProvider(requireApiKey(active), model);
     case "custom":
       if (!active.baseUrl) {
         throw new AegisExit(
@@ -86,8 +83,6 @@ function providerLabel(provider: ActiveProviderConfig["provider"]): string {
       return "Google";
     case "deepseek":
       return "DeepSeek";
-    case "mistral":
-      return "Mistral";
     case "custom":
       return "Local model";
   }

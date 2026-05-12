@@ -1,7 +1,6 @@
 import { AegisExit } from "../abort.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { GoogleProvider } from "./google.js";
-import { MistralProvider } from "./mistral.js";
 import {
   CustomProvider,
   DeepSeekProvider,
@@ -453,8 +452,6 @@ function providerFromInput(input: ProviderConfigInput): LLMProvider {
         : new GoogleProvider(input.apiKey, input.model);
     case "deepseek":
       return new DeepSeekProvider(input.apiKey, input.model);
-    case "mistral":
-      return new MistralProvider(input.apiKey, input.model);
     case "custom":
       return new CustomProvider(input.baseUrl, input.apiKey, input.model);
   }

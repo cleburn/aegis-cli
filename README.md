@@ -42,7 +42,7 @@ aegis explain
 aegis validate
 ```
 
-On first run, Aegis asks you to pick a model explicitly. It supports Anthropic, OpenAI, Google, DeepSeek, Mistral, and local/open-source models served through an OpenAI-compatible local server such as Ollama, LM Studio, llama.cpp server, or vLLM. API keys are stored per provider in `~/.aegis/config.json`, and one provider is marked active.
+On first run, Aegis asks you to pick a model explicitly. It supports Anthropic, OpenAI, Google, DeepSeek, and local/open-source models served through an OpenAI-compatible local server such as Ollama, LM Studio, llama.cpp server, or vLLM. API keys are stored per provider in `~/.aegis/config.json`, and one provider is marked active.
 
 ## How `aegis init` Works
 
@@ -123,7 +123,6 @@ Aegis can read provider keys from the environment or from `~/.aegis/config.json`
 | OpenAI | `OPENAI_API_KEY` |
 | Google | Browser sign-in, or `GOOGLE_API_KEY` / `GEMINI_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
-| Mistral | `MISTRAL_API_KEY` |
 | Local/open-source model | `AEGIS_CUSTOM_API_KEY` |
 
 For local/open-source models, Aegis prompts for the local server base URL and model ID. The API key is optional because many local servers do not require authentication.

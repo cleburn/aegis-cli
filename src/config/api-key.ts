@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as readline from "node:readline";
 import { AegisExit } from "../abort.js";
+import { isKnownModelForProvider } from "../llm/models.js";
 
 const AEGIS_DIR = path.join(os.homedir(), ".aegis");
 const CONFIG_PATH = path.join(AEGIS_DIR, "config.json");
@@ -12,7 +13,6 @@ export const PROVIDER_IDS = [
   "openai",
   "google",
   "deepseek",
-  "mistral",
   "custom",
 ] as const;
 
@@ -67,7 +67,6 @@ const PROVIDER_ENV_VARS: Record<ProviderId, string> = {
   openai: "OPENAI_API_KEY",
   google: "GOOGLE_API_KEY",
   deepseek: "DEEPSEEK_API_KEY",
-  mistral: "MISTRAL_API_KEY",
   custom: "AEGIS_CUSTOM_API_KEY",
 };
 const GOOGLE_API_KEY_ENV_VARS = ["GOOGLE_API_KEY", "GEMINI_API_KEY"] as const;
@@ -148,7 +147,7 @@ function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean 
 
       const apiKey = entry.apiKey;
       const baseUrl = entry.baseUrl;
-      const model = entry.model;
+      const model = normalizeProviderModel(provider, entry.model);
       const authMethod = entry.authMethod;
       const reauthRequired = entry.reauthRequired;
       if (provider === "custom") {
@@ -210,6 +209,14 @@ function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean 
   };
 
   return { config, changed };
+}
+
+function normalizeProviderModel(
+  provider: ProviderId,
+  model: unknown
+): string | undefined {
+  if (typeof model !== "string") return undefined;
+  return isKnownModelForProvider(provider, model) ? model : undefined;
 }
 
 function writeConfig(config: AegisConfig): void {

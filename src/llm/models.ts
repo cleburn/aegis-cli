@@ -5,12 +5,10 @@ export const MODEL_IDS = {
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
-    "claude-haiku-4-5",
   ],
   openai: ["gpt-5.5", "gpt-5.4"],
   google: ["gemini-3.1-pro-preview"],
   deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
-  mistral: ["mistral-large-2512"],
   custom: ["local-model"],
 } as const satisfies Record<ProviderId, readonly string[]>;
 
@@ -20,13 +18,11 @@ export const MODEL_OPTIONS = [
   { provider: "anthropic", model: "claude-opus-4-7", label: "Claude Opus 4.7" },
   { provider: "anthropic", model: "claude-opus-4-6", label: "Claude Opus 4.6" },
   { provider: "anthropic", model: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-  { provider: "anthropic", model: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
   { provider: "openai", model: "gpt-5.5", label: "OpenAI GPT-5.5" },
   { provider: "openai", model: "gpt-5.4", label: "OpenAI GPT-5.4" },
   { provider: "google", model: "gemini-3.1-pro-preview", label: "Google Gemini 3.1" },
   { provider: "deepseek", model: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
   { provider: "deepseek", model: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
-  { provider: "mistral", model: "mistral-large-2512", label: "Mistral Large 3" },
   { provider: "custom", model: "local-model", label: "Local / open-source model (Gemma, Qwen, Kimi, etc...)" },
 ] as const satisfies ReadonlyArray<{
   provider: ProviderId;
@@ -60,6 +56,16 @@ export function resolveModelForProvider(
   provider: ProviderId,
   configuredModel?: string
 ): string {
-  if (configuredModel) return configuredModel;
+  if (configuredModel && isKnownModelForProvider(provider, configuredModel)) {
+    return configuredModel;
+  }
   return defaultModelForProvider(provider);
+}
+
+export function isKnownModelForProvider(
+  provider: ProviderId,
+  model: string
+): boolean {
+  if (provider === "custom") return model.length > 0;
+  return (MODEL_IDS[provider] as readonly string[]).includes(model);
 }
