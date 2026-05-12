@@ -68,6 +68,54 @@ test("GoogleProvider validates with ADC and reports API-key env conflicts", asyn
   }
 });
 
+test("GoogleProvider ADC failure uses polished hint and suppresses metadata warnings", async () => {
+  const originalGoogleKey = process.env.GOOGLE_API_KEY;
+  const originalGeminiKey = process.env.GEMINI_API_KEY;
+  const originalEmitWarning = process.emitWarning;
+  delete process.env.GOOGLE_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  const warnings = [];
+
+  const authClient = {
+    getRequestHeaders: async () => {
+      process.emitWarning(
+        "MetadataLookupWarning: received unexpected error = All promises were rejected code = UNKNOWN",
+        "MetadataLookupWarning"
+      );
+      throw new Error(
+        "Could not load the default credentials. Browse to https://cloud.google.com/docs/authentication/getting-started for more information."
+      );
+    },
+    getProjectId: async () => "test-project",
+  };
+
+  try {
+    process.emitWarning = (warning, ...args) => {
+      warnings.push({ warning, args });
+    };
+    const provider = new GoogleProvider({
+      authMethod: "adc",
+      model: "gemini-test",
+      validateTimeoutMs: 50,
+      googleAuthOptions: { authClient },
+    });
+    const result = await provider.validate();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "transport");
+    assert.equal(
+      result.detail,
+      "Sign-in failed because Google credentials aren't set up. Run `gcloud auth application-default login` in another terminal, then retry."
+    );
+    assert.equal(warnings.length, 0);
+    assert.doesNotMatch(result.detail, /https:\/\/cloud\.google\.com/);
+    assert.doesNotMatch(result.detail, /\.\./);
+  } finally {
+    process.emitWarning = originalEmitWarning;
+    restoreEnv("GOOGLE_API_KEY", originalGoogleKey);
+    restoreEnv("GEMINI_API_KEY", originalGeminiKey);
+  }
+});
+
 test("GoogleProvider validate returns transport failure on timeout", async () => {
   await withMockFetch([
     () => new Promise(() => {}),

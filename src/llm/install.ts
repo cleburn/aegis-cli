@@ -330,13 +330,13 @@ async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput
 async function promptForGoogleConfig(
   option: ModelOption
 ): Promise<ProviderConfigInput> {
-  console.log("  Google Gemini can use gcloud Application Default Credentials or an API key.");
-  console.log("  1. Use gcloud authentication");
+  console.log("  Google Gemini supports signing in with your Google account or using an API key.");
+  console.log("  1. Sign in with Google");
   console.log("  2. Use a Google API key");
   console.log("");
 
   while (true) {
-    const raw = await prompt("  Google auth method (Enter = gcloud, 2 = API key): ");
+    const raw = await prompt("  Google auth method (Enter = Google sign-in, 2 = API key): ");
     if (!raw || raw === "1") {
       const conflicts = getGoogleApiKeyEnvConflicts();
       if (conflicts.length > 0) {

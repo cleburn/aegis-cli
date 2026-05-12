@@ -32,7 +32,7 @@ type GoogleContent = {
 
 const GOOGLE_VALIDATE_TIMEOUT_MS = 15_000;
 const GOOGLE_ADC_SETUP_HINT =
-  "Run `gcloud auth application-default login` in another terminal, then try again.";
+  "Sign-in failed because Google credentials aren't set up. Run `gcloud auth application-default login` in another terminal, then retry.";
 const GOOGLE_API_KEY_ENV_VARS = ["GOOGLE_API_KEY", "GEMINI_API_KEY"] as const;
 
 export class GoogleProvider implements LLMProvider {
@@ -158,17 +158,18 @@ export class GoogleProvider implements LLMProvider {
         resolve("timeout");
       }, this.validateTimeoutMs);
     });
-    const validationRequest = this.client.models.generateContent({
-      model: this.model,
-      contents: [{ role: "user", parts: [{ text: "ping" }] }],
-      config: {
-        maxOutputTokens: 32,
-        httpOptions: { timeout: this.validateTimeoutMs },
-        abortSignal: controller.signal,
-      },
-    });
-
     try {
+      const validationRequest = this.withAdcWarningSuppression(() =>
+        this.client.models.generateContent({
+          model: this.model,
+          contents: [{ role: "user", parts: [{ text: "ping" }] }],
+          config: {
+            maxOutputTokens: 32,
+            httpOptions: { timeout: this.validateTimeoutMs },
+            abortSignal: controller.signal,
+          },
+        })
+      );
       const result = await Promise.race([validationRequest, timeoutResult]);
       if (result === "timeout") {
         validationRequest.catch(() => {});
@@ -206,10 +207,37 @@ export class GoogleProvider implements LLMProvider {
     }
     return {
       ...result,
-      detail: result.detail
-        ? `${result.detail}. ${GOOGLE_ADC_SETUP_HINT}`
-        : GOOGLE_ADC_SETUP_HINT,
+      detail: GOOGLE_ADC_SETUP_HINT,
     };
+  }
+
+  private async withAdcWarningSuppression<T>(
+    fn: () => Promise<T>
+  ): Promise<T> {
+    if (this.authMethod !== "adc") return fn();
+
+    const emitWarning = process.emitWarning;
+    const replacement = (
+      warning: string | Error,
+      ...args: unknown[]
+    ) => {
+      const message = warning instanceof Error ? warning.message : warning;
+      const warningName = warning instanceof Error ? warning.name : args[0];
+      if (
+        warningName === "MetadataLookupWarning" ||
+        (typeof message === "string" &&
+          message.includes("MetadataLookupWarning: received unexpected error"))
+      ) {
+        return;
+      }
+      return Reflect.apply(emitWarning, process, [warning, ...args]);
+    };
+    process.emitWarning = replacement as typeof process.emitWarning;
+    try {
+      return await fn();
+    } finally {
+      process.emitWarning = emitWarning;
+    }
   }
 }
 
