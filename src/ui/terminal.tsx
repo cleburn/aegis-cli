@@ -338,28 +338,17 @@ function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extractio
     setFrameIndex(0);
   }, [animation]);
 
-  // Two animation cadences. Thinking-mode animations (dots, pulse,
-  // ambient cycles) loop indefinitely — they're decorative time-fill.
-  // Extraction-mode is the shield-assembly animation, a one-shot
-  // sequence that builds up to a complete shield. Looping it makes
-  // the shield visually disassemble and reassemble repeatedly when
-  // extraction takes longer than (frames * 600ms), which is most of
-  // the time. Hold on the final frame after one pass and stop the
-  // timer to avoid unnecessary re-renders while the extraction call
-  // continues.
+  // Both modes keep moving until stopThinking unmounts this component.
+  // Extraction can run for minutes, and a static final shield reads as
+  // "stuck" even when the provider is still working.
   useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
+    const timer = setInterval(() => {
       setFrameIndex((i) => {
-        const next = nextThinkingFrameIndex(mode, i, animation.length);
-        if (mode === "extraction" && next === i && timer) {
-          clearInterval(timer);
-          timer = null;
-        }
-        return next;
+        return nextThinkingFrameIndex(mode, i, animation.length);
       });
     }, 600);
     return () => {
-      if (timer) clearInterval(timer);
+      clearInterval(timer);
     };
   }, [animation, mode]);
 
@@ -381,9 +370,6 @@ export function nextThinkingFrameIndex(
   frameCount: number
 ): number {
   if (frameCount <= 1) return 0;
-  if (mode === "extraction") {
-    return Math.min(current + 1, frameCount - 1);
-  }
   return (current + 1) % frameCount;
 }
 

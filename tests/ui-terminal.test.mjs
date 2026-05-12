@@ -30,14 +30,14 @@ test("wrapping breaks long unspaced input instead of clipping it", () => {
   assert.equal(wrapped.join(""), message);
 });
 
-test("extraction thinking frames advance to final frame and hold", () => {
+test("extraction thinking frames keep looping until unmounted", () => {
   let index = 0;
   for (let i = 0; i < 20; i += 1) {
     index = nextThinkingFrameIndex("extraction", index, 5);
   }
 
-  assert.equal(index, 4);
-  assert.equal(nextThinkingFrameIndex("extraction", index, 5), 4);
+  assert.equal(index, 0);
+  assert.equal(nextThinkingFrameIndex("extraction", 4, 5), 0);
 });
 
 test("thinking frames loop", () => {
