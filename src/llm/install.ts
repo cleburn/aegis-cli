@@ -12,6 +12,7 @@ import { MODEL_OPTIONS, type ModelOption } from "./models.js";
 import type { TerminalUI } from "../ui/terminal.js";
 import {
   getActiveProviderConfig,
+  getGoogleApiKeyEnvConflicts,
   getProviderEnvVar,
   getProviderEnvValue,
   prompt,
@@ -36,6 +37,9 @@ const CHOOSE_MODEL_HEADER = "  Choose the model Aegis should use.";
 export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
     return Boolean(active.baseUrl);
+  }
+  if (active.provider === "google" && active.authMethod === "adc") {
+    return true;
   }
   return Boolean(active.apiKey);
 }
@@ -305,6 +309,9 @@ async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput
       model,
     };
   }
+  if (option.provider === "google") {
+    return promptForGoogleConfig(option);
+  }
 
   const envVar = getProviderEnvVar(option.provider);
   console.log(`  API key required. You can also use ${envVar} after setup.`);
@@ -318,6 +325,51 @@ async function promptForConfig(option: ModelOption): Promise<ProviderConfigInput
     apiKey,
     model: option.model,
   };
+}
+
+async function promptForGoogleConfig(
+  option: ModelOption
+): Promise<ProviderConfigInput> {
+  console.log("  Google Gemini can use gcloud Application Default Credentials or an API key.");
+  console.log("  1. Use gcloud authentication");
+  console.log("  2. Use a Google API key");
+  console.log("");
+
+  while (true) {
+    const raw = await prompt("  Google auth method (Enter = gcloud, 2 = API key): ");
+    if (!raw || raw === "1") {
+      const conflicts = getGoogleApiKeyEnvConflicts();
+      if (conflicts.length > 0) {
+        console.log(
+          `  gcloud authentication cannot be used while ${conflicts.join(
+            " or "
+          )} is set. Unset those variables or choose option 2 for the API-key path.`
+        );
+        continue;
+      }
+      return {
+        provider: "google",
+        authMethod: "adc",
+        model: option.model,
+      };
+    }
+    if (raw === "2") {
+      const envVar = getProviderEnvVar("google");
+      console.log(`  API key required. You can also use ${envVar} after setup.`);
+      const apiKey = (await prompt("  API key: ", true)).trim();
+      if (!apiKey) {
+        throw new AegisExit(130, `${option.label} API key is required.`);
+      }
+      return {
+        provider: "google",
+        authMethod: "apiKey",
+        apiKey,
+        model: option.model,
+      };
+    }
+
+    console.log("  Enter 1 for gcloud authentication or 2 for an API key.");
+  }
 }
 
 async function promptTransportRecovery(
@@ -363,7 +415,9 @@ function providerFromInput(input: ProviderConfigInput): LLMProvider {
     case "openai":
       return new OpenAIProvider(input.apiKey, input.model);
     case "google":
-      return new GoogleProvider(input.apiKey, input.model);
+      return input.authMethod === "adc"
+        ? new GoogleProvider({ authMethod: "adc", model: input.model })
+        : new GoogleProvider(input.apiKey, input.model);
     case "deepseek":
       return new DeepSeekProvider(input.apiKey, input.model);
     case "mistral":
@@ -376,6 +430,24 @@ function providerFromInput(input: ProviderConfigInput): LLMProvider {
 function inputFromStoredConfig(option: ModelOption): ProviderConfigInput | null {
   const stored = readConfig().providers[option.provider];
   const envKey = getProviderEnvValue(option.provider);
+
+  if (option.provider === "google") {
+    if (stored?.authMethod === "adc") {
+      return {
+        provider: "google",
+        authMethod: "adc",
+        model: option.model,
+      };
+    }
+    const apiKey = envKey ?? stored?.apiKey;
+    if (!apiKey) return null;
+    return {
+      provider: "google",
+      authMethod: "apiKey",
+      apiKey,
+      model: option.model,
+    };
+  }
 
   if (option.provider === "custom") {
     if (!stored?.baseUrl || !stored.model) return null;

@@ -113,20 +113,22 @@ Three artifacts, one governance framework:
 ## Requirements
 
 - Node.js >= 22.3.0
-- Credentials for whichever hosted provider you choose, or a running local OpenAI-compatible server for local/open-source models
+- Credentials for whichever hosted provider you choose, gcloud Application Default Credentials for Google, or a running local OpenAI-compatible server for local/open-source models
 
-Aegis can read provider keys from the environment or from `~/.aegis/config.json`. The active provider's environment variable wins over the stored key for that provider:
+Aegis can read provider keys from the environment or from `~/.aegis/config.json`. For API-key authentication, the active provider's environment variable wins over the stored key for that provider:
 
 | Provider | Environment variable |
 |----------|----------------------|
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
-| Google | `GOOGLE_API_KEY` |
+| Google | `GOOGLE_API_KEY` or `GEMINI_API_KEY`; gcloud ADC is also supported |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
 | Local/open-source model | `AEGIS_CUSTOM_API_KEY` |
 
 For local/open-source models, Aegis prompts for the local server base URL and model ID. The API key is optional because many local servers do not require authentication.
+
+For Google Gemini, choose gcloud authentication if you've run `gcloud auth application-default login`. If a Google API-key environment variable is set, unset it before using the gcloud path so the SDK does not prefer the key.
 
 ## License
 

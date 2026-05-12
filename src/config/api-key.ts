@@ -18,11 +18,13 @@ export const PROVIDER_IDS = [
 
 export type ProviderId = typeof PROVIDER_IDS[number];
 export type StandardProviderId = Exclude<ProviderId, "custom">;
+export type GoogleAuthMethod = "apiKey" | "adc";
 
 export interface ProviderConfig {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  authMethod?: GoogleAuthMethod;
 }
 
 export interface AegisConfig {
@@ -32,7 +34,9 @@ export interface AegisConfig {
 }
 
 export type ProviderConfigInput =
-  | { provider: StandardProviderId; apiKey: string; model?: string }
+  | { provider: Exclude<StandardProviderId, "google">; apiKey: string; model?: string }
+  | { provider: "google"; authMethod?: "apiKey"; apiKey: string; model?: string }
+  | { provider: "google"; authMethod: "adc"; model?: string }
   | { provider: "custom"; baseUrl: string; apiKey?: string; model?: string };
 
 export type ActiveProviderConfig = {
@@ -40,6 +44,7 @@ export type ActiveProviderConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  authMethod?: GoogleAuthMethod;
   apiKeySource: "env" | "config" | "missing";
   envVar: string;
 };
@@ -63,9 +68,14 @@ const PROVIDER_ENV_VARS: Record<ProviderId, string> = {
   mistral: "MISTRAL_API_KEY",
   custom: "AEGIS_CUSTOM_API_KEY",
 };
+const GOOGLE_API_KEY_ENV_VARS = ["GOOGLE_API_KEY", "GEMINI_API_KEY"] as const;
 
 function isProviderId(value: unknown): value is ProviderId {
   return typeof value === "string" && PROVIDER_IDS.includes(value as ProviderId);
+}
+
+function isGoogleAuthMethod(value: unknown): value is GoogleAuthMethod {
+  return value === "apiKey" || value === "adc";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,10 +95,12 @@ function providerConfigEquals(a: unknown, b: ProviderConfig | undefined): boolea
   const apiKey = a.apiKey;
   const baseUrl = a.baseUrl;
   const model = a.model;
+  const authMethod = a.authMethod;
   return (
     (typeof apiKey === "string" ? apiKey : undefined) === b?.apiKey &&
     (typeof baseUrl === "string" ? baseUrl : undefined) === b?.baseUrl &&
-    (typeof model === "string" ? model : undefined) === b?.model
+    (typeof model === "string" ? model : undefined) === b?.model &&
+    (isGoogleAuthMethod(authMethod) ? authMethod : undefined) === b?.authMethod
   );
 }
 
@@ -132,12 +144,24 @@ function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean 
       const apiKey = entry.apiKey;
       const baseUrl = entry.baseUrl;
       const model = entry.model;
+      const authMethod = entry.authMethod;
       if (provider === "custom") {
         providers.custom = {
           ...(typeof apiKey === "string" ? { apiKey } : {}),
           ...(typeof baseUrl === "string" ? { baseUrl } : {}),
           ...(typeof model === "string" ? { model } : {}),
         };
+      } else if (provider === "google") {
+        const normalizedAuthMethod = isGoogleAuthMethod(authMethod)
+          ? authMethod
+          : "apiKey";
+        if (normalizedAuthMethod === "adc" || typeof apiKey === "string") {
+          providers.google = {
+            ...(typeof apiKey === "string" ? { apiKey } : {}),
+            ...(typeof model === "string" ? { model } : {}),
+            authMethod: normalizedAuthMethod,
+          };
+        }
       } else if (typeof apiKey === "string") {
         providers[provider] = {
           apiKey,
@@ -215,7 +239,18 @@ export function getProviderEnvVar(provider: ProviderId): string {
 }
 
 export function getProviderEnvValue(provider: ProviderId): string | undefined {
+  if (provider === "google") {
+    for (const envVar of GOOGLE_API_KEY_ENV_VARS) {
+      const value = process.env[envVar];
+      if (value) return value;
+    }
+    return undefined;
+  }
   return process.env[getProviderEnvVar(provider)];
+}
+
+export function getGoogleApiKeyEnvConflicts(): string[] {
+  return GOOGLE_API_KEY_ENV_VARS.filter((envVar) => Boolean(process.env[envVar]));
 }
 
 export function getActiveProviderConfig(): ActiveProviderConfig {
@@ -224,14 +259,23 @@ export function getActiveProviderConfig(): ActiveProviderConfig {
   const stored = config.providers[provider] ?? {};
   const envVar = getProviderEnvVar(provider);
   const envKey = getProviderEnvValue(provider);
-  const apiKey = envKey || stored.apiKey;
+  const authMethod = provider === "google"
+    ? stored.authMethod ?? "apiKey"
+    : undefined;
+  const apiKey = provider === "google" && authMethod === "adc"
+    ? undefined
+    : envKey || stored.apiKey;
+  const apiKeySource = provider === "google" && authMethod === "adc"
+    ? "missing"
+    : envKey ? "env" : stored.apiKey ? "config" : "missing";
 
   return {
     provider,
     ...(apiKey ? { apiKey } : {}),
     ...(provider === "custom" && stored.baseUrl ? { baseUrl: stored.baseUrl } : {}),
     ...(stored.model ? { model: stored.model } : {}),
-    apiKeySource: envKey ? "env" : stored.apiKey ? "config" : "missing",
+    ...(authMethod ? { authMethod } : {}),
+    apiKeySource,
     envVar,
   };
 }
@@ -241,17 +285,7 @@ export function saveProviderConfig(
   options: { makeActive?: boolean } = {}
 ): AegisConfig {
   const config = readConfig();
-  const providerConfig: ProviderConfig =
-    input.provider === "custom"
-      ? {
-          baseUrl: input.baseUrl,
-          ...(input.apiKey ? { apiKey: input.apiKey } : {}),
-          ...(input.model ? { model: input.model } : {}),
-        }
-      : {
-          apiKey: input.apiKey,
-          ...(input.model ? { model: input.model } : {}),
-        };
+  const providerConfig = providerConfigFromInput(input, config);
 
   const next: AegisConfig = {
     version: 1,
@@ -266,6 +300,41 @@ export function saveProviderConfig(
 
   writeConfig(next);
   return next;
+}
+
+function providerConfigFromInput(
+  input: ProviderConfigInput,
+  config: AegisConfig
+): ProviderConfig {
+  if (input.provider === "custom") {
+    return {
+      baseUrl: input.baseUrl,
+      ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+      ...(input.model ? { model: input.model } : {}),
+    };
+  }
+
+  if (input.provider === "google") {
+    if (input.authMethod === "adc") {
+      const stored = config.providers.google;
+      return {
+        ...(stored?.apiKey ? { apiKey: stored.apiKey } : {}),
+        ...(input.model ? { model: input.model } : {}),
+        authMethod: "adc",
+      };
+    }
+
+    return {
+      apiKey: input.apiKey,
+      ...(input.model ? { model: input.model } : {}),
+      authMethod: "apiKey",
+    };
+  }
+
+  return {
+    apiKey: input.apiKey,
+    ...(input.model ? { model: input.model } : {}),
+  };
 }
 
 export function setActiveProvider(provider: ProviderId): AegisConfig {
