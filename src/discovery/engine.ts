@@ -716,7 +716,10 @@ export class DiscoveryEngine {
 
       // Build the existing policy baseline for return visits
       const existingBaseline = this.buildExistingPolicyBaseline();
-      const extractionPrompt = buildExtractionSystemPrompt(existingBaseline);
+      const extractionPrompt = buildExtractionSystemPrompt(
+        existingBaseline,
+        existingBaseline ? this.scan.policyMigrationFindings : []
+      );
 
       const transcriptSummary = this.messages
         .map((m) => {
@@ -938,10 +941,9 @@ export class DiscoveryEngine {
    * usable baseline — first-time init, or a return visit where the
    * on-disk state did not satisfy the full spec floor (constitution
    * + governance + ledger + at least one role) as parseable
-   * non-empty JSON. Partial baselines must not be passed to
-   * extraction labeled as "literal starting point" — that's the
-   * silent-drift failure mode the scanner's hasUsableBaseline gate
-   * exists to prevent.
+   * non-empty JSON. Schema-drifted baselines are still returned:
+   * extraction receives them together with migration findings so it
+   * can fix only user-confirmed drift.
    */
   private buildExistingPolicyBaseline(): string | undefined {
     if (!this.scan.hasUsableBaseline) {

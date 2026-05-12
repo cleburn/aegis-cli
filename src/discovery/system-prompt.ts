@@ -24,6 +24,7 @@
 
 import type { ScanResult } from "./scanner.js";
 import { formatScanBriefing, repoHasRealSource } from "./scanner.js";
+import type { PolicyMigrationFinding } from "../policy/deprecations.js";
 
 /**
  * Discovery targets — the specific things Aegis must extract.
@@ -296,6 +297,22 @@ Because you have no reliable view of the existing policy, treat this session as 
 If the human says "just rebuild from scratch," proceed with a first-visit-style discovery conversation: gather identity, stack, principles, autonomy, permissions, conventions, quality gate, roles, escalation, and required artifacts.
 
 If the human dictates what the old policy contained, that becomes your baseline verbally and you can compile from it — but the briefing is the source of truth for what you actually loaded, and the briefing says you loaded nothing.`;
+    }
+
+    if (scan.policyMigrationFindings.length > 0) {
+      return `== YOUR OPENING ==
+
+This is a return visit. There's already an .agentpolicy/ directory in this repo, and the policy files loaded into your scan. Some of that policy was written against an older Aegis schema and needs migration before it fully matches the current contract.${transcriptCount > 0 ? ` You also have transcripts from ${transcriptCount} prior session(s) — you know the full history of how this governance was built.` : ""}
+
+Your opener is short and conversational. Acknowledge that you see the existing policy, name the migration drift at a high level, and ask whether the human wants to walk through the migration alongside whatever else they came to update. Do not imply you will rewrite anything without their confirmation.
+
+Something like: "Hey — I can see your existing policy, and I noticed a few spots were written against an older Aegis shape. I can walk through those and migrate them cleanly if you want. What changed since the last session?"
+
+Then wait. Let them lead.
+
+== RETURN VISIT WORKFLOW (MIGRATION AWARENESS) ==
+
+The briefing contains POLICY MIGRATION FINDINGS with the exact files and fields that drifted. Raise them naturally with the human, explain why they matter, and ask for confirmation before migrating. Once the human confirms, treat the migration as a conversation-named edit during extraction. Preserve all non-drifted policy content verbatim unless the human explicitly changes it.`;
     }
 
     return `== YOUR OPENING ==
@@ -606,8 +623,21 @@ When the human types /exit, /quit, or /done, the session ends and the full trans
  * version reflecting the conversation's changes.
  */
 export function buildExtractionSystemPrompt(
-  existingPolicy?: string
+  existingPolicy?: string,
+  migrationFindings: readonly PolicyMigrationFinding[] = []
 ): string {
+  const migrationSection =
+    migrationFindings.length > 0
+      ? `== POLICY MIGRATION CONTEXT ==
+
+The baseline above contains older Aegis schema shapes that were surfaced to the human during discovery. These are the migration findings:
+
+${formatMigrationFindings(migrationFindings)}
+
+Migration is an explicit exception to verbatim preservation ONLY when the transcript shows the human affirmed the migration. If the human affirmed, migrate these fields to the current schema while preserving the user's intent and applying any other conversation-named edits. If the human declined or never confirmed migration, preserve the baseline shape as-is even if it remains schema-drifted.
+
+`
+      : "";
   const baselineSection = existingPolicy
     ? `== EXISTING POLICY BASELINE ==
 
@@ -669,6 +699,7 @@ STRUCTURED EDIT SPECS
 
 When the conversation contains a structured edit spec — JSON pointers, before/after blocks, numbered change items, explicit preservation lists — treat each spec item as a discrete operation against the baseline JSON. Apply them one at a time. A spec's preservation list is authoritative: anything it lists as "preserve" must appear unchanged in the output. Do not regenerate from your general understanding of what was discussed; execute the spec.
 
+${migrationSection}
 `
     : "";
 
@@ -899,4 +930,18 @@ LENGTH GUIDANCE:
 The spec defines no maximum string lengths and no item-count ceilings — every text field is sized to substance. A simple module might need 80 characters for its purpose. A compliance-gated orchestration module with regulatory context uses as much room as the substance requires. For enterprise or compliance-heavy projects (PCI-DSS, HIPAA, CMMC, ITAR, SOX, FedRAMP), use the room you need — regulatory rationale, framework citations, and full policy statements all belong in the policy verbatim. Don't pad to fill space; don't cut substance to stay terse.
 
 No markdown, no explanation — just the JSON.`;
+}
+
+function formatMigrationFindings(
+  findings: readonly PolicyMigrationFinding[]
+): string {
+  return findings
+    .map((finding) => {
+      const errors =
+        finding.errors && finding.errors.length > 0
+          ? `\n  Validation errors: ${finding.errors.join("; ")}`
+          : "";
+      return `- ${finding.location}: ${finding.summary} (${finding.since}). ${finding.guidance}${errors}`;
+    })
+    .join("\n");
 }

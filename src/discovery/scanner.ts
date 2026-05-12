@@ -14,6 +14,7 @@ import {
 import { validateAgainstSchema } from "../policy/validator.js";
 import {
   detectPolicyDeprecations,
+  detectSchemaValidationDrift,
   type PolicyMigrationFinding,
 } from "../policy/deprecations.js";
 
@@ -76,16 +77,13 @@ export interface ScanResult {
   hasAuthoredPolicy: boolean;
   /**
    * Whether the on-disk .agentpolicy/ provides a baseline downstream
-   * code can rely on as a return-visit starting point. True iff the
-   * full spec floor (constitution.json + governance.json +
+   * code can use as a return-visit starting point. True iff the full
+   * spec floor (constitution.json + governance.json +
    * state/ledger.json + at least one role file) all loaded as
-   * non-empty parseable JSON. A directory that exists but has
-   * missing, empty, malformed, or unreadable floor pieces is NOT
-   * a usable baseline — partial state from an aborted prior init,
-   * stray empty `.agentpolicy/` left by a Ctrl+C during API-key
-   * resolution, or hand-edited corruption all fall through to this
-   * branch so the prompt and extraction code route the session as
-   * near-first-time rather than trusting a half-loaded baseline.
+   * non-empty parseable JSON. Schema-invalid but parseable files are
+   * still usable as migration baselines and surface separately in
+   * policyMigrationFindings; malformed, empty, unreadable, or missing
+   * floor pieces are not usable.
    */
   hasUsableBaseline: boolean;
   /** Existing .agentpolicy files if found */
@@ -1092,8 +1090,9 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // user can't even rerun init to fix things). The new behavior
     // warns loudly, skips the offending file, and lets
     // hasUsableBaseline (computed below) fall through to false so
-    // the session is routed as near-first-time. Extraction never
-    // sees a half-loaded baseline labeled as authoritative.
+    // the session is routed as near-first-time. Schema validation is
+    // intentionally not a skip gate: parseable older-spec content is
+    // the exact material the migration conversation needs to see.
     for (const policyFile of existingPolicyFiles) {
       const fullPath = path.join(policyDir, policyFile);
       const content = await readFileSafe(fullPath, {
@@ -1132,15 +1131,12 @@ export async function scanRepo(root: string): Promise<ScanResult> {
         continue;
       }
 
-      // Schema-validate against the bundled spec schemas. A baseline
-      // that passes JSON.parse but fails schema validation cannot be
-      // trusted as an authoritative starting point — feeding it to
-      // extraction would teach the model a non-conforming shape as
-      // the literal preserve-verbatim baseline, with the failure
-      // mode of validatePolicyObject rejecting the round-tripped
-      // output later for the same shape problem the input had.
-      // Surface the validation error and skip so hasUsableBaseline
-      // routes the session through the empty-baseline branch.
+      // Schema-validate against the bundled spec schemas. A parseable
+      // file that fails current schema validation is not corruption;
+      // it may be older user-authored policy that needs a
+      // conversational migration. Capture the drift, keep the content
+      // in the baseline, and let extraction correct it only after the
+      // user confirms the migration.
       //
       // Schema name comes from the centralized manifest: floor
       // entries are looked up by their relativePath; role files
@@ -1163,14 +1159,13 @@ export async function scanRepo(root: string): Promise<ScanResult> {
           `.agentpolicy/${policyFile}`
         );
         if (!result.valid) {
-          const summary = result.errors
-            .slice(0, 3)
-            .join("; ")
-            .slice(0, 300);
-          process.stderr.write(
-            `[aegis] policy file ".agentpolicy/${policyFile}" failed schema validation (${summary}). Skipping; treating session as near-first-time.\n`
+          policyMigrationFindings.push(
+            ...detectSchemaValidationDrift(
+              `.agentpolicy/${policyFile}`,
+              result,
+              parsedJson
+            )
           );
-          continue;
         }
 
         // Role-file identity cross-check: the on-disk filename's
@@ -1207,12 +1202,10 @@ export async function scanRepo(root: string): Promise<ScanResult> {
 
     // Floor check — the spec requires constitution + governance +
     // ledger + at least one role for any return-visit context that
-    // downstream consumers can trust. Anything less is partial
-    // state, not a baseline. The on-disk artifacts that DID load
-    // remain in existingPolicyContents for diagnostic visibility,
-    // but hasUsableBaseline gates the "this is your literal starting
-    // point" framing — extraction will not be told that with a
-    // half-present baseline.
+    // downstream consumers can use. Anything less is partial state,
+    // not a baseline. Schema-drifted files still count as loaded:
+    // they are parseable user-authored content and are carried into
+    // extraction together with policyMigrationFindings.
     //
     // The check is strict on every enumerated file, not just floor
     // membership. If the directory holds five role files but two
@@ -1227,12 +1220,9 @@ export async function scanRepo(root: string): Promise<ScanResult> {
     // empty-baseline branch.
     //
     // The per-file load loop above gates each candidate file
-    // through readability, non-empty content, JSON.parse, AND
-    // schema validation against its bundled spec schema. A file
-    // that fails any gate is warned-and-skipped, so existingPolicyContents
-    // contains only schema-conforming baseline pieces. Round-trip
-    // through extraction will not be rejected for a shape problem
-    // the input already had.
+    // through readability, non-empty content, and JSON.parse.
+    // Schema validation failures are not skipped; they become drift
+    // findings so the LLM can ask before migrating the content.
     const loadedPaths = new Set(
       existingPolicyContents.map((c) => c.path)
     );
@@ -1246,9 +1236,10 @@ export async function scanRepo(root: string): Promise<ScanResult> {
       c.path.startsWith(`.agentpolicy/${ROLES_DIR_RELATIVE}/`)
     );
     hasUsableBaseline = allEnumeratedLoaded && allFloorLoaded && hasRole;
-    if (hasUsableBaseline) {
-      policyMigrationFindings = detectPolicyDeprecations(existingPolicyContents);
-    }
+    policyMigrationFindings = [
+      ...policyMigrationFindings,
+      ...detectPolicyDeprecations(existingPolicyContents),
+    ];
   }
 
   // ── Session transcripts ──────────────────────────────────────────
@@ -1575,6 +1566,8 @@ export function formatScanBriefing(scan: ScanResult): string {
   // baseline is a recovery case. hasUsableBaseline is the strongest
   // gate: true iff the full spec floor (constitution + governance +
   // ledger + at least one role) all loaded as non-empty parseable JSON.
+  // Schema drift still counts as a loaded baseline and rides as
+  // migration context.
   const transcriptCount = scan.existingSessionTranscripts?.length ?? 0;
 
   if (scan.hasUsableBaseline) {
@@ -1694,13 +1687,10 @@ export function formatScanBriefing(scan: ScanResult): string {
 
   // ── Existing policy ──────────────────────────────────────────────
   // Only render the full "EXISTING CONTENTS" section when the loaded
-  // set actually constitutes a usable baseline. Partially-loaded
-  // state (e.g. constitution + governance present but ledger missing
-  // or malformed) gets the warning line instead so the prompt
-  // doesn't show partial content under a heading that implies a
-  // complete baseline. The stderr warnings emitted during the scan
-  // are the authoritative diagnostic for which specific files
-  // failed to load.
+  // set actually constitutes a usable baseline. Schema-drifted JSON
+  // still renders here because it is the starting point for a
+  // user-approved migration; malformed or missing floor pieces get
+  // the warning line instead.
   if (scan.hasUsableBaseline) {
     lines.push("");
     lines.push("== EXISTING .agentpolicy/ CONTENTS ==");
