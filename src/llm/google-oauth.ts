@@ -46,7 +46,7 @@ export const GOOGLE_OAUTH_CLIENT_ID =
 export const GOOGLE_OAUTH_CLIENT_SECRET =
   "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";
 
-const GOOGLE_OAUTH_SCOPE = "https://www.googleapis.com/auth/generative-language";
+const GOOGLE_OAUTH_SCOPE = "https://www.googleapis.com/auth/generative-language.retriever";
 const GOOGLE_OAUTH_TIMEOUT_MS = 120_000;
 
 export async function runGoogleOAuthFlow(
