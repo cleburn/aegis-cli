@@ -10,19 +10,34 @@ import {
   MAX_TOKENS,
   MAX_TOKENS_JSON,
   parseJSONResponse,
+  PROVIDER_VALIDATE_TIMEOUT_MS,
+  runWithValidationTimeout,
   splitSystemMessages,
   truncationNote,
+  VALIDATION_TIMEOUT,
+  validationTimeoutResult,
 } from "./common.js";
 import { defaultModelForProvider } from "./models.js";
+
+type AnthropicProviderOptions = {
+  validateTimeoutMs?: number;
+};
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "Anthropic";
   private client: Anthropic;
   private model: string;
+  private validateTimeoutMs: number;
 
-  constructor(apiKey: string, model: string = defaultModelForProvider("anthropic")) {
+  constructor(
+    apiKey: string,
+    model: string = defaultModelForProvider("anthropic"),
+    options: AnthropicProviderOptions = {}
+  ) {
     this.client = new Anthropic({ apiKey });
     this.model = model;
+    this.validateTimeoutMs =
+      options.validateTimeoutMs ?? PROVIDER_VALIDATE_TIMEOUT_MS;
   }
 
   async chat(
@@ -165,11 +180,21 @@ export class AnthropicProvider implements LLMProvider {
 
   async validate(): Promise<ProviderValidateResult> {
     try {
-      await this.client.messages.create({
-        model: this.model,
-        max_tokens: 10,
-        messages: [{ role: "user", content: "ping" }],
-      });
+      const result = await runWithValidationTimeout(
+        (signal) =>
+          this.client.messages.create(
+            {
+              model: this.model,
+              max_tokens: 10,
+              messages: [{ role: "user", content: "ping" }],
+            },
+            { signal }
+          ),
+        this.validateTimeoutMs
+      );
+      if (result === VALIDATION_TIMEOUT) {
+        return validationTimeoutResult(this.validateTimeoutMs);
+      }
       return { ok: true };
     } catch (err) {
       return classifyProviderError(err);

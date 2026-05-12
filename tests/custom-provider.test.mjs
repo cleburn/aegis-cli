@@ -25,6 +25,34 @@ test("CustomProvider validates success and auth failure", async () => {
   });
 });
 
+test("CustomProvider validate returns transport failure on timeout without Authorization", async () => {
+  let requestSignal;
+  await withMockFetch([
+    (_input, init) => {
+      requestSignal = init?.signal;
+      return new Promise((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      });
+    },
+  ], async (calls) => {
+    const provider = new CustomProvider(
+      "http://localhost:11434/v1",
+      undefined,
+      "llama3",
+      { validateTimeoutMs: 5 }
+    );
+    const result = await provider.validate();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "transport");
+    assert.match(result.detail, /timed out after 0.005s/);
+    assert.equal(requestSignal?.aborted, true);
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get("authorization"), null);
+  });
+});
+
 test("CustomProvider handles chat, JSON truncation, and stream truncation without Authorization", async () => {
   await withMockFetch([
     () => jsonResponse(chatCompletion("hello")),

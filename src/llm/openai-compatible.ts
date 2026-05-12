@@ -18,7 +18,11 @@ import {
   MAX_TOKENS,
   MAX_TOKENS_JSON,
   parseJSONResponse,
+  PROVIDER_VALIDATE_TIMEOUT_MS,
+  runWithValidationTimeout,
   truncationNote,
+  VALIDATION_TIMEOUT,
+  validationTimeoutResult,
 } from "./common.js";
 import { defaultModelForProvider } from "./models.js";
 
@@ -28,21 +32,29 @@ type OpenAICompatibleOptions = {
   name: string;
   baseURL?: string;
   tokenLimitField?: "max_tokens" | "max_completion_tokens";
+  validateTimeoutMs?: number;
 };
 
 const LOCAL_AUTH_PLACEHOLDER = "aegis-local-auth-placeholder";
 const OPENAI_REASONING_NONE = { effort: "none" as const };
+
+type ProviderOptions = {
+  validateTimeoutMs?: number;
+};
 
 export class OpenAICompatibleProvider implements LLMProvider {
   readonly name: string;
   protected client: OpenAI;
   protected model: string;
   private tokenLimitField: "max_tokens" | "max_completion_tokens";
+  private validateTimeoutMs: number;
 
   constructor(options: OpenAICompatibleOptions) {
     this.name = options.name;
     this.model = options.model;
     this.tokenLimitField = options.tokenLimitField ?? "max_completion_tokens";
+    this.validateTimeoutMs =
+      options.validateTimeoutMs ?? PROVIDER_VALIDATE_TIMEOUT_MS;
     this.client = new OpenAI({
       // The OpenAI SDK requires an apiKey at construction; local servers
       // without auth get this value stripped by the custom fetch below.
@@ -135,11 +147,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
   async validate(): Promise<ProviderValidateResult> {
     try {
-      await this.client.chat.completions.create({
-        model: this.model,
-        ...this.tokenLimit(10),
-        messages: [{ role: "user", content: "ping" }],
-      });
+      const result = await runWithValidationTimeout(
+        (signal) =>
+          this.client.chat.completions.create(
+            {
+              model: this.model,
+              ...this.tokenLimit(10),
+              messages: [{ role: "user", content: "ping" }],
+            },
+            { signal }
+          ),
+        this.validateTimeoutMs
+      );
+      if (result === VALIDATION_TIMEOUT) {
+        return validationTimeoutResult(this.validateTimeoutMs);
+      }
       return { ok: true };
     } catch (err) {
       return classifyProviderError(err);
@@ -157,10 +179,17 @@ export class OpenAIProvider implements LLMProvider {
   readonly name = "OpenAI";
   private client: OpenAI;
   private model: string;
+  private validateTimeoutMs: number;
 
-  constructor(apiKey: string, model = defaultModelForProvider("openai")) {
+  constructor(
+    apiKey: string,
+    model = defaultModelForProvider("openai"),
+    options: ProviderOptions = {}
+  ) {
     this.client = new OpenAI({ apiKey });
     this.model = model;
+    this.validateTimeoutMs =
+      options.validateTimeoutMs ?? PROVIDER_VALIDATE_TIMEOUT_MS;
   }
 
   async chat(
@@ -250,12 +279,22 @@ export class OpenAIProvider implements LLMProvider {
 
   async validate(): Promise<ProviderValidateResult> {
     try {
-      await this.client.responses.create({
-        model: this.model,
-        input: "ping",
-        max_output_tokens: 16,
-        reasoning: OPENAI_REASONING_NONE,
-      });
+      const result = await runWithValidationTimeout(
+        (signal) =>
+          this.client.responses.create(
+            {
+              model: this.model,
+              input: "ping",
+              max_output_tokens: 16,
+              reasoning: OPENAI_REASONING_NONE,
+            },
+            { signal }
+          ),
+        this.validateTimeoutMs
+      );
+      if (result === VALIDATION_TIMEOUT) {
+        return validationTimeoutResult(this.validateTimeoutMs);
+      }
       return { ok: true };
     } catch (err) {
       return classifyProviderError(err);
@@ -264,25 +303,36 @@ export class OpenAIProvider implements LLMProvider {
 }
 
 export class DeepSeekProvider extends OpenAICompatibleProvider {
-  constructor(apiKey: string, model = defaultModelForProvider("deepseek")) {
+  constructor(
+    apiKey: string,
+    model = defaultModelForProvider("deepseek"),
+    options: ProviderOptions = {}
+  ) {
     super({
       name: "DeepSeek",
       apiKey,
       model,
       baseURL: "https://api.deepseek.com",
       tokenLimitField: "max_tokens",
+      validateTimeoutMs: options.validateTimeoutMs,
     });
   }
 }
 
 export class CustomProvider extends OpenAICompatibleProvider {
-  constructor(baseURL: string, apiKey?: string, model = defaultModelForProvider("custom")) {
+  constructor(
+    baseURL: string,
+    apiKey?: string,
+    model = defaultModelForProvider("custom"),
+    options: ProviderOptions = {}
+  ) {
     super({
       name: "Local model",
       apiKey,
       model,
       baseURL,
       tokenLimitField: "max_tokens",
+      validateTimeoutMs: options.validateTimeoutMs,
     });
   }
 }

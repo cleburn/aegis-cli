@@ -21,6 +21,29 @@ test("DeepSeekProvider validates success and auth failure", async () => {
   });
 });
 
+test("DeepSeekProvider validate returns transport failure on timeout", async () => {
+  let requestSignal;
+  await withMockFetch([
+    (_input, init) => {
+      requestSignal = init?.signal;
+      return new Promise((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      });
+    },
+  ], async () => {
+    const provider = new DeepSeekProvider("deepseek-key", "deepseek-test", {
+      validateTimeoutMs: 5,
+    });
+    const result = await provider.validate();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "transport");
+    assert.match(result.detail, /timed out after 0.005s/);
+    assert.equal(requestSignal?.aborted, true);
+  });
+});
+
 test("DeepSeekProvider handles chat, JSON truncation, and stream truncation", async () => {
   await withMockFetch([
     () => jsonResponse(chatCompletion("hello")),

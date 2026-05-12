@@ -2,9 +2,54 @@ import type { Message, ProviderMessage, ProviderValidateResult } from "./provide
 
 export const MAX_TOKENS = 16384;
 export const MAX_TOKENS_JSON = 128000;
+export const PROVIDER_VALIDATE_TIMEOUT_MS = 15_000;
+export const VALIDATION_TIMEOUT: unique symbol = Symbol("validation-timeout");
 
 export function truncationNote(): string {
   return "\n\n[Aegis note: this response was cut off at the model's max_tokens limit. Tell me how to continue or what to skip.]";
+}
+
+export function validationTimeoutResult(
+  timeoutMs: number
+): ProviderValidateResult {
+  return {
+    ok: false,
+    reason: "transport",
+    detail: `validation request timed out after ${timeoutMs / 1000}s`,
+  };
+}
+
+export async function runWithValidationTimeout<T>(
+  request: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number = PROVIDER_VALIDATE_TIMEOUT_MS
+): Promise<T | typeof VALIDATION_TIMEOUT> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutResult: Promise<typeof VALIDATION_TIMEOUT> = new Promise((resolve) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      resolve(VALIDATION_TIMEOUT);
+    }, timeoutMs);
+  });
+  const requestResult: Promise<T | typeof VALIDATION_TIMEOUT> = request(
+    controller.signal
+  ).catch((err) => {
+    if (controller.signal.aborted) {
+      return VALIDATION_TIMEOUT;
+    }
+    throw err;
+  });
+
+  try {
+    return await Promise.race<T | typeof VALIDATION_TIMEOUT>([
+      requestResult,
+      timeoutResult,
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export function parseJSONResponse<T>(raw: string): T {
