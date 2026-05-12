@@ -50,8 +50,8 @@ export function createProviderFromActive(active: ActiveProviderConfig): LLMProvi
     case "openai":
       return new OpenAIProvider(requireApiKey(active), model);
     case "google":
-      return active.authMethod === "adc"
-        ? new GoogleProvider({ authMethod: "adc", model })
+      return active.authMethod === "oauth"
+        ? new GoogleProvider({ authMethod: "oauth", model })
         : new GoogleProvider(requireApiKey(active), model);
     case "deepseek":
       return new DeepSeekProvider(requireApiKey(active), model);

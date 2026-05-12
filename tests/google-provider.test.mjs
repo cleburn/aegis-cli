@@ -24,96 +24,79 @@ test("GoogleProvider validates success and auth failure", async () => {
   });
 });
 
-test("GoogleProvider validates with ADC and reports API-key env conflicts", async () => {
+test("GoogleProvider validates with OAuth credentials", async () => {
   const originalGoogleKey = process.env.GOOGLE_API_KEY;
   const originalGeminiKey = process.env.GEMINI_API_KEY;
   delete process.env.GOOGLE_API_KEY;
   delete process.env.GEMINI_API_KEY;
 
-  const authClient = {
-    getRequestHeaders: async () => new Headers([["authorization", "Bearer adc-token"]]),
+  const oauthClient = {
+    credentials: { access_token: "oauth-token", refresh_token: "refresh-token" },
+    getRequestHeaders: async () => new Headers([["authorization", "Bearer oauth-token"]]),
     getProjectId: async () => "test-project",
+    on: () => {},
   };
 
   try {
     await withMockFetch([
       (_input, init) => {
-        assert.equal(new Headers(init?.headers).get("authorization"), "Bearer adc-token");
+        assert.equal(new Headers(init?.headers).get("authorization"), "Bearer oauth-token");
         return jsonResponse(googleResponse("pong"));
       },
     ], async () => {
       const provider = new GoogleProvider({
-        authMethod: "adc",
+        authMethod: "oauth",
         model: "gemini-test",
         validateTimeoutMs: 50,
-        googleAuthOptions: { authClient },
+        oauthClient,
       });
       assert.deepEqual(await provider.validate(), { ok: true });
     });
-
-    process.env.GEMINI_API_KEY = "env-key";
-    const blockedProvider = new GoogleProvider({
-      authMethod: "adc",
-      model: "gemini-test",
-      validateTimeoutMs: 50,
-    });
-    const blocked = await blockedProvider.validate();
-    assert.equal(blocked.ok, false);
-    assert.equal(blocked.reason, "transport");
-    assert.match(blocked.detail, /GEMINI_API_KEY/);
-    assert.match(blocked.detail, /API-key path/);
   } finally {
     restoreEnv("GOOGLE_API_KEY", originalGoogleKey);
     restoreEnv("GEMINI_API_KEY", originalGeminiKey);
   }
 });
 
-test("GoogleProvider ADC failure uses polished hint and suppresses metadata warnings", async () => {
-  const originalGoogleKey = process.env.GOOGLE_API_KEY;
-  const originalGeminiKey = process.env.GEMINI_API_KEY;
-  const originalEmitWarning = process.emitWarning;
-  delete process.env.GOOGLE_API_KEY;
-  delete process.env.GEMINI_API_KEY;
-  const warnings = [];
-
-  const authClient = {
-    getRequestHeaders: async () => {
-      process.emitWarning(
-        "MetadataLookupWarning: received unexpected error = All promises were rejected code = UNKNOWN",
-        "MetadataLookupWarning"
-      );
-      throw new Error(
-        "Could not load the default credentials. Browse to https://cloud.google.com/docs/authentication/getting-started for more information."
-      );
-    },
+test("GoogleProvider refreshes OAuth tokens on auth failure", async () => {
+  const oauthClient = {
+    credentials: { access_token: "old-token", refresh_token: "refresh-token" },
+    getRequestHeaders: async () =>
+      new Headers([["authorization", `Bearer ${oauthClient.credentials.access_token}`]]),
     getProjectId: async () => "test-project",
+    refreshAccessToken: async () => ({
+      credentials: {
+        access_token: "new-token",
+        refresh_token: "refresh-token",
+        expiry_date: Date.now() + 3600_000,
+      },
+      res: null,
+    }),
+    setCredentials: (credentials) => {
+      oauthClient.credentials = credentials;
+    },
+    on: () => {},
   };
 
-  try {
-    process.emitWarning = (warning, ...args) => {
-      warnings.push({ warning, args });
-    };
+  await withMockFetch([
+    (_input, init) => {
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer old-token");
+      return jsonResponse({ error: { code: 401, message: "expired" } }, 401);
+    },
+    (_input, init) => {
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer new-token");
+      return jsonResponse(googleResponse("pong"));
+    },
+  ], async () => {
     const provider = new GoogleProvider({
-      authMethod: "adc",
+      authMethod: "oauth",
       model: "gemini-test",
       validateTimeoutMs: 50,
-      googleAuthOptions: { authClient },
+      oauthClient,
+      onOAuthTokens: () => {},
     });
-    const result = await provider.validate();
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, "transport");
-    assert.equal(
-      result.detail,
-      "Sign-in failed because Google credentials aren't set up. Run `gcloud auth application-default login` in another terminal, then retry."
-    );
-    assert.equal(warnings.length, 0);
-    assert.doesNotMatch(result.detail, /https:\/\/cloud\.google\.com/);
-    assert.doesNotMatch(result.detail, /\.\./);
-  } finally {
-    process.emitWarning = originalEmitWarning;
-    restoreEnv("GOOGLE_API_KEY", originalGoogleKey);
-    restoreEnv("GEMINI_API_KEY", originalGeminiKey);
-  }
+    assert.deepEqual(await provider.validate(), { ok: true });
+  });
 });
 
 test("GoogleProvider validate returns transport failure on timeout", async () => {
@@ -124,6 +107,30 @@ test("GoogleProvider validate returns transport failure on timeout", async () =>
       apiKey: "test-key",
       model: "gemini-test",
       validateTimeoutMs: 5,
+    });
+    const result = await provider.validate();
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "transport");
+    assert.match(result.detail, /timed out after 0.005s/);
+  });
+});
+
+test("GoogleProvider validate timeout also applies to OAuth", async () => {
+  const oauthClient = {
+    credentials: { access_token: "oauth-token", refresh_token: "refresh-token" },
+    getRequestHeaders: async () => new Headers([["authorization", "Bearer oauth-token"]]),
+    getProjectId: async () => "test-project",
+    on: () => {},
+  };
+
+  await withMockFetch([
+    () => new Promise(() => {}),
+  ], async () => {
+    const provider = new GoogleProvider({
+      authMethod: "oauth",
+      model: "gemini-test",
+      validateTimeoutMs: 5,
+      oauthClient,
     });
     const result = await provider.validate();
     assert.equal(result.ok, false);

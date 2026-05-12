@@ -9,6 +9,10 @@ import {
 } from "./openai-compatible.js";
 import type { LLMProvider, ProviderValidateResult } from "./provider.js";
 import { MODEL_OPTIONS, type ModelOption } from "./models.js";
+import {
+  hasGoogleOAuthTokens,
+  runGoogleOAuthFlow,
+} from "./google-oauth.js";
 import type { TerminalUI } from "../ui/terminal.js";
 import {
   getActiveProviderConfig,
@@ -38,8 +42,8 @@ export function hasUsableActiveProvider(active: ActiveProviderConfig): boolean {
   if (active.provider === "custom") {
     return Boolean(active.baseUrl);
   }
-  if (active.provider === "google" && active.authMethod === "adc") {
-    return true;
+  if (active.provider === "google" && active.authMethod === "oauth") {
+    return !active.reauthRequired && hasGoogleOAuthTokens();
   }
   return Boolean(active.apiKey);
 }
@@ -59,6 +63,11 @@ export async function runProviderInstallFlow(): Promise<ActiveProviderConfig> {
 
 export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
   const active = getActiveProviderConfig();
+  if (requiresGoogleReauth(active)) {
+    console.log("");
+    console.log("  Aegis no longer requires gcloud for Google. Sign in with Google to continue, or choose the API-key path.");
+    return configureExistingGoogleProvider(active);
+  }
   if (!hasUsableActiveProvider(active)) {
     return runProviderInstallFlow();
   }
@@ -91,6 +100,28 @@ export async function confirmProviderForInit(): Promise<ActiveProviderConfig> {
       return getActiveProviderConfig();
     }
   }
+}
+
+async function configureExistingGoogleProvider(
+  active: ActiveProviderConfig
+): Promise<ActiveProviderConfig> {
+  const option = googleOptionForActive(active);
+  while (true) {
+    const result = await configureAndValidate(option, { preferStored: false });
+    if (result === "saved") {
+      return getActiveProviderConfig();
+    }
+  }
+}
+
+function requiresGoogleReauth(active: ActiveProviderConfig): boolean {
+  return active.provider === "google" && Boolean(active.reauthRequired);
+}
+
+function googleOptionForActive(active: ActiveProviderConfig): ModelOption {
+  return MODEL_OPTIONS.find(
+    (option) => option.provider === "google" && option.model === active.model
+  ) ?? MODEL_OPTIONS.find((option) => option.provider === "google")!;
 }
 
 export async function runModelSwitchFlow(
@@ -341,15 +372,17 @@ async function promptForGoogleConfig(
       const conflicts = getGoogleApiKeyEnvConflicts();
       if (conflicts.length > 0) {
         console.log(
-          `  gcloud authentication cannot be used while ${conflicts.join(
+          `  Google sign-in cannot be used while ${conflicts.join(
             " or "
           )} is set. Unset those variables or choose option 2 for the API-key path.`
         );
         continue;
       }
+      console.log("  Opening your browser to sign in with Google...");
+      await runGoogleOAuthFlow();
       return {
         provider: "google",
-        authMethod: "adc",
+        authMethod: "oauth",
         model: option.model,
       };
     }
@@ -368,7 +401,7 @@ async function promptForGoogleConfig(
       };
     }
 
-    console.log("  Enter 1 for gcloud authentication or 2 for an API key.");
+    console.log("  Enter 1 to sign in with Google or 2 for an API key.");
   }
 }
 
@@ -415,8 +448,8 @@ function providerFromInput(input: ProviderConfigInput): LLMProvider {
     case "openai":
       return new OpenAIProvider(input.apiKey, input.model);
     case "google":
-      return input.authMethod === "adc"
-        ? new GoogleProvider({ authMethod: "adc", model: input.model })
+      return input.authMethod === "oauth"
+        ? new GoogleProvider({ authMethod: "oauth", model: input.model })
         : new GoogleProvider(input.apiKey, input.model);
     case "deepseek":
       return new DeepSeekProvider(input.apiKey, input.model);
@@ -432,10 +465,10 @@ function inputFromStoredConfig(option: ModelOption): ProviderConfigInput | null 
   const envKey = getProviderEnvValue(option.provider);
 
   if (option.provider === "google") {
-    if (stored?.authMethod === "adc") {
+    if (stored?.authMethod === "oauth" && !stored.reauthRequired && hasGoogleOAuthTokens()) {
       return {
         provider: "google",
-        authMethod: "adc",
+        authMethod: "oauth",
         model: option.model,
       };
     }

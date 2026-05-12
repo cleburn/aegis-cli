@@ -18,13 +18,14 @@ export const PROVIDER_IDS = [
 
 export type ProviderId = typeof PROVIDER_IDS[number];
 export type StandardProviderId = Exclude<ProviderId, "custom">;
-export type GoogleAuthMethod = "apiKey" | "adc";
+export type GoogleAuthMethod = "apiKey" | "oauth";
 
 export interface ProviderConfig {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
   authMethod?: GoogleAuthMethod;
+  reauthRequired?: boolean;
 }
 
 export interface AegisConfig {
@@ -36,7 +37,7 @@ export interface AegisConfig {
 export type ProviderConfigInput =
   | { provider: Exclude<StandardProviderId, "google">; apiKey: string; model?: string }
   | { provider: "google"; authMethod?: "apiKey"; apiKey: string; model?: string }
-  | { provider: "google"; authMethod: "adc"; model?: string }
+  | { provider: "google"; authMethod: "oauth"; model?: string }
   | { provider: "custom"; baseUrl: string; apiKey?: string; model?: string };
 
 export type ActiveProviderConfig = {
@@ -45,6 +46,7 @@ export type ActiveProviderConfig = {
   baseUrl?: string;
   model?: string;
   authMethod?: GoogleAuthMethod;
+  reauthRequired?: boolean;
   apiKeySource: "env" | "config" | "missing";
   envVar: string;
 };
@@ -75,7 +77,7 @@ function isProviderId(value: unknown): value is ProviderId {
 }
 
 function isGoogleAuthMethod(value: unknown): value is GoogleAuthMethod {
-  return value === "apiKey" || value === "adc";
+  return value === "apiKey" || value === "oauth";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,11 +98,14 @@ function providerConfigEquals(a: unknown, b: ProviderConfig | undefined): boolea
   const baseUrl = a.baseUrl;
   const model = a.model;
   const authMethod = a.authMethod;
+  const reauthRequired = a.reauthRequired;
   return (
     (typeof apiKey === "string" ? apiKey : undefined) === b?.apiKey &&
     (typeof baseUrl === "string" ? baseUrl : undefined) === b?.baseUrl &&
     (typeof model === "string" ? model : undefined) === b?.model &&
-    (isGoogleAuthMethod(authMethod) ? authMethod : undefined) === b?.authMethod
+    (isGoogleAuthMethod(authMethod) ? authMethod : undefined) === b?.authMethod &&
+    (typeof reauthRequired === "boolean" ? reauthRequired : undefined) ===
+      b?.reauthRequired
   );
 }
 
@@ -145,6 +150,7 @@ function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean 
       const baseUrl = entry.baseUrl;
       const model = entry.model;
       const authMethod = entry.authMethod;
+      const reauthRequired = entry.reauthRequired;
       if (provider === "custom") {
         providers.custom = {
           ...(typeof apiKey === "string" ? { apiKey } : {}),
@@ -152,14 +158,23 @@ function normalizeConfig(raw: unknown): { config: AegisConfig; changed: boolean 
           ...(typeof model === "string" ? { model } : {}),
         };
       } else if (provider === "google") {
-        const normalizedAuthMethod = isGoogleAuthMethod(authMethod)
-          ? authMethod
-          : "apiKey";
-        if (normalizedAuthMethod === "adc" || typeof apiKey === "string") {
+        const normalizedAuthMethod =
+          authMethod === "adc"
+            ? "oauth"
+            : isGoogleAuthMethod(authMethod)
+              ? authMethod
+              : "apiKey";
+        const needsReauth = authMethod === "adc"
+          ? true
+          : typeof reauthRequired === "boolean"
+            ? reauthRequired
+            : undefined;
+        if (normalizedAuthMethod === "oauth" || typeof apiKey === "string") {
           providers.google = {
             ...(typeof apiKey === "string" ? { apiKey } : {}),
             ...(typeof model === "string" ? { model } : {}),
             authMethod: normalizedAuthMethod,
+            ...(needsReauth ? { reauthRequired: needsReauth } : {}),
           };
         }
       } else if (typeof apiKey === "string") {
@@ -262,10 +277,10 @@ export function getActiveProviderConfig(): ActiveProviderConfig {
   const authMethod = provider === "google"
     ? stored.authMethod ?? "apiKey"
     : undefined;
-  const apiKey = provider === "google" && authMethod === "adc"
+  const apiKey = provider === "google" && authMethod === "oauth"
     ? undefined
     : envKey || stored.apiKey;
-  const apiKeySource = provider === "google" && authMethod === "adc"
+  const apiKeySource = provider === "google" && authMethod === "oauth"
     ? "missing"
     : envKey ? "env" : stored.apiKey ? "config" : "missing";
 
@@ -275,6 +290,7 @@ export function getActiveProviderConfig(): ActiveProviderConfig {
     ...(provider === "custom" && stored.baseUrl ? { baseUrl: stored.baseUrl } : {}),
     ...(stored.model ? { model: stored.model } : {}),
     ...(authMethod ? { authMethod } : {}),
+    ...(stored.reauthRequired ? { reauthRequired: stored.reauthRequired } : {}),
     apiKeySource,
     envVar,
   };
@@ -315,12 +331,12 @@ function providerConfigFromInput(
   }
 
   if (input.provider === "google") {
-    if (input.authMethod === "adc") {
+    if (input.authMethod === "oauth") {
       const stored = config.providers.google;
       return {
         ...(stored?.apiKey ? { apiKey: stored.apiKey } : {}),
         ...(input.model ? { model: input.model } : {}),
-        authMethod: "adc",
+        authMethod: "oauth",
       };
     }
 
