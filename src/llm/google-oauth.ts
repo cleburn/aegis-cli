@@ -39,13 +39,12 @@ export type GoogleOAuthFlowOptions = {
   }) => Promise<Credentials>;
 };
 
-// TODO: Replace before the live OAuth integration test. Desktop-app OAuth
-// client values are distributed with installed apps; they are identifiers, not
-// a server-side secret boundary.
+// Desktop-app OAuth client values are distributed with installed apps; per
+// Google's own docs they are identifiers, not a server-side secret boundary.
 export const GOOGLE_OAUTH_CLIENT_ID =
-  "TODO_REPLACE_WITH_GOOGLE_DESKTOP_CLIENT_ID.apps.googleusercontent.com";
+  "677504568055-6vlq85ca3lulc17vmc9mlk1q4818e2d4.apps.googleusercontent.com";
 export const GOOGLE_OAUTH_CLIENT_SECRET =
-  "TODO_REPLACE_WITH_GOOGLE_DESKTOP_CLIENT_SECRET";
+  "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";
 
 const GOOGLE_OAUTH_SCOPE = "https://www.googleapis.com/auth/generative-language";
 const GOOGLE_OAUTH_TIMEOUT_MS = 120_000;
