@@ -84,3 +84,11 @@ export function getSlashCommandGhost(
     description: command.description,
   };
 }
+
+export function formatSlashCommandGhost(
+  ghost: NonNullable<SlashCommandGhost>
+): string {
+  return ghost.continuation
+    ? `${ghost.continuation} - ${ghost.description}`
+    : ghost.description;
+}

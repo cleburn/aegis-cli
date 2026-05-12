@@ -14,7 +14,7 @@
  * commands with their descriptions.
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { render, Box, Text, Static, useInput } from "ink";
 import stringWidth from "string-width";
 import chalk from "chalk";
@@ -27,6 +27,7 @@ import {
 import {
   CLI_COMMANDS,
   DISCOVERY_COMMANDS,
+  formatSlashCommandGhost,
   getSlashCommandGhost,
   type SlashCommand,
   SESSION_COMMANDS,
@@ -85,32 +86,71 @@ interface AppBridge {
 
 // ── Word Wrapping ──────────────────────────────────────────────────
 
-function getWrapWidth(): number {
+export function getWrapWidth(): number {
   return Math.max(40, (process.stdout.columns || 80) - GUTTER_WIDTH);
 }
 
-function wrapText(text: string, width: number): string {
+export function wrapText(text: string, width: number): string {
+  const safeWidth = Math.max(1, width);
   return text
     .split("\n")
     .map((paragraph) => {
-      if (paragraph.length <= width) return paragraph;
+      if (stringWidth(paragraph) <= safeWidth) return paragraph;
       const words = paragraph.split(" ");
       const lines: string[] = [];
       let current = "";
       for (const word of words) {
         if (current.length === 0) {
-          current = word;
-        } else if (current.length + 1 + word.length <= width) {
+          const chunks = splitWordToWidth(word, safeWidth);
+          current = chunks.pop() ?? "";
+          lines.push(...chunks);
+        } else if (stringWidth(`${current} ${word}`) <= safeWidth) {
           current += " " + word;
         } else {
           lines.push(current);
-          current = word;
+          const chunks = splitWordToWidth(word, safeWidth);
+          current = chunks.pop() ?? "";
+          lines.push(...chunks);
         }
       }
       if (current.length > 0) lines.push(current);
       return lines.join("\n");
     })
     .join("\n");
+}
+
+function splitWordToWidth(word: string, width: number): string[] {
+  if (stringWidth(word) <= width) return [word];
+
+  const chunks: string[] = [];
+  let current = "";
+  for (const char of word) {
+    if (current && stringWidth(current + char) > width) {
+      chunks.push(current);
+      current = char;
+    } else {
+      current += char;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+export type ConversationWrapLine = {
+  text: string;
+  showLabel: boolean;
+};
+
+export function wrapConversationTurn(
+  text: string,
+  width: number
+): ConversationWrapLine[] {
+  return wrapText(text, width)
+    .split("\n")
+    .map((line, index) => ({
+      text: line,
+      showLabel: index === 0,
+    }));
 }
 
 // ── Colorize Thinking (ported from original) ───────────────────────
@@ -141,8 +181,7 @@ function WrappedLines({
   label: string;
   dimText?: boolean;
 }) {
-  const wrapped = wrapText(text, getWrapWidth());
-  const lines = wrapped.split("\n");
+  const lines = wrapConversationTurn(text, getWrapWidth());
   // Pad label to 5 chars so "aegis" and "you" align the same
   const paddedLabel = label.padEnd(5);
   const gap = "  "; // 2 spaces after label
@@ -152,7 +191,7 @@ function WrappedLines({
       {lines.map((line, i) => (
         <Box key={i}>
           <Text color={barColor}>▎ </Text>
-          {i === 0 ? (
+          {line.showLabel ? (
             <>
               <Text color={barColor}>{paddedLabel}</Text>
               <Text>{gap}</Text>
@@ -160,7 +199,7 @@ function WrappedLines({
           ) : (
             <Text>{"       "}</Text>
           )}
-          <Text dimColor={dimText}>{line}</Text>
+          <Text dimColor={dimText}>{line.text}</Text>
         </Box>
       ))}
       <Box>
@@ -285,7 +324,7 @@ function BannerHeader({
 
 function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extraction" }) {
   const [frameIndex, setFrameIndex] = useState(0);
-  const [animation] = useState(() => {
+  const animation = useMemo(() => {
     if (mode === "extraction") return SHIELD_ASSEMBLY_FRAMES;
     const cols = process.stdout.columns || 80;
     const animations =
@@ -293,7 +332,11 @@ function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extractio
         ? [SHIELD_PULSE_FRAMES]
         : THINKING_ANIMATIONS;
     return animations[Math.floor(Math.random() * animations.length)];
-  });
+  }, [mode]);
+
+  useEffect(() => {
+    setFrameIndex(0);
+  }, [animation]);
 
   // Two animation cadences. Thinking-mode animations (dots, pulse,
   // ambient cycles) loop indefinitely — they're decorative time-fill.
@@ -307,17 +350,12 @@ function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extractio
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = setInterval(() => {
       setFrameIndex((i) => {
-        if (mode === "extraction") {
-          if (i + 1 >= animation.length) {
-            if (timer) {
-              clearInterval(timer);
-              timer = null;
-            }
-            return animation.length - 1;
-          }
-          return i + 1;
+        const next = nextThinkingFrameIndex(mode, i, animation.length);
+        if (mode === "extraction" && next === i && timer) {
+          clearInterval(timer);
+          timer = null;
         }
-        return (i + 1) % animation.length;
+        return next;
       });
     }, 600);
     return () => {
@@ -325,7 +363,7 @@ function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extractio
     };
   }, [animation, mode]);
 
-  const frame = animation[frameIndex];
+  const frame = animation[Math.min(frameIndex, animation.length - 1)] ?? "";
   const colored = colorizeThinking(frame);
 
   return (
@@ -335,6 +373,18 @@ function ThinkingDisplay({ mode = "thinking" }: { mode?: "thinking" | "extractio
       ))}
     </Box>
   );
+}
+
+export function nextThinkingFrameIndex(
+  mode: "thinking" | "extraction",
+  current: number,
+  frameCount: number
+): number {
+  if (frameCount <= 1) return 0;
+  if (mode === "extraction") {
+    return Math.min(current + 1, frameCount - 1);
+  }
+  return (current + 1) % frameCount;
 }
 
 // ── Streaming Response Component ───────────────────────────────────
@@ -405,7 +455,7 @@ function InputPrompt({
       : inputText.slice(inputText.length - inputWidth);
   const ghost = getSlashCommandGhost(inputText, commands);
   const ghostText = ghost
-    ? `${ghost.continuation} - ${ghost.description}`
+    ? formatSlashCommandGhost(ghost)
     : "";
 
   return (

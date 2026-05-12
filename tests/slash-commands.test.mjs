@@ -5,6 +5,7 @@ import {
   POST_COMPLETION_COMMANDS,
   resolveSlashCommand,
   formatSlashCommandMatch,
+  formatSlashCommandGhost,
   getSlashCommandGhost,
 } from "../dist/src/ui/commands.js";
 import { AegisExit } from "../dist/src/abort.js";
@@ -57,6 +58,8 @@ test("slash command ghost text resolves unique prefixes", () => {
   assert.ok(exact);
   assert.equal(exact.continuation, "");
   assert.equal(exact.description, "switch models during this discovery session");
+  assert.equal(formatSlashCommandGhost(exact), "switch models during this discovery session");
+  assert.doesNotMatch(formatSlashCommandGhost(exact), /^ -/);
 
   assert.equal(
     getSlashCommandGhost("/d", [
@@ -68,11 +71,14 @@ test("slash command ghost text resolves unique prefixes", () => {
 });
 
 test("post-completion slash command ghost text uses post-completion commands", () => {
-  assert.deepEqual(getSlashCommandGhost("/d", POST_COMPLETION_COMMANDS), {
+  const ghost = getSlashCommandGhost("/d", POST_COMPLETION_COMMANDS);
+  assert.deepEqual(ghost, {
     command: POST_COMPLETION_COMMANDS[2],
     continuation: "one",
     description: "finish this completed session",
   });
+  assert.ok(ghost);
+  assert.equal(formatSlashCommandGhost(ghost), "one - finish this completed session");
 });
 
 test("discovery command handler runs model switch for prefix match", async () => {
