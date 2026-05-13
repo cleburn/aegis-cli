@@ -30,6 +30,7 @@ import {
 } from "../config/api-key.js";
 
 type InstallResult = "saved" | "pick-again";
+type ValidationResult = InstallResult | "auth" | "canceled";
 type ModelSelection = { option: ModelOption; keepCurrent: boolean };
 type SelectModelOptions = {
   current?: ActiveProviderConfig;
@@ -38,6 +39,10 @@ type SelectModelOptions = {
 export type ModelSwitchResult =
   | { switched: true; active: ActiveProviderConfig }
   | { switched: false };
+type ModelSwitchUI = Pick<TerminalUI, "showNote" | "selectFromMenu">;
+type RecoverySurface =
+  | { mode: "console"; cancelReturns?: boolean }
+  | { mode: "session"; ui: ModelSwitchUI };
 
 const CHOOSE_MODEL_HEADER = "  Choose the model Aegis should use.";
 
@@ -47,12 +52,24 @@ export type PromptFn = (
 ) => Promise<string>;
 
 let prompt: PromptFn = readPrompt;
+let providerFactory: (input: ProviderConfigInput) => LLMProvider =
+  defaultProviderFromInput;
 
 export function setInstallPromptForTests(nextPrompt: PromptFn): () => void {
   const previous = prompt;
   prompt = nextPrompt;
   return () => {
     prompt = previous;
+  };
+}
+
+export function setProviderFactoryForTests(
+  nextFactory: (input: ProviderConfigInput) => LLMProvider
+): () => void {
+  const previous = providerFactory;
+  providerFactory = nextFactory;
+  return () => {
+    providerFactory = previous;
   };
 }
 
@@ -143,51 +160,52 @@ function googleOptionForActive(active: ActiveProviderConfig): ModelOption {
 }
 
 export async function runModelSwitchFlow(
-  ui: TerminalUI
+  ui: ModelSwitchUI
 ): Promise<ModelSwitchResult> {
   const active = getActiveProviderConfig();
-  const selection = await selectModelInSession(ui, active);
-  if (selection.keepCurrent) {
-    ui.showNote("Keeping the current model.");
-    return { switched: false };
-  }
-
-  const input = inputFromStoredConfig(selection.option);
-  if (!input) {
-    if (selection.option.provider === "custom") {
-      const result = await configureAndValidate(selection.option, {
-        preferStored: false,
-        cancelReturns: true,
-      });
-      return result === "saved"
-        ? { switched: true, active: getActiveProviderConfig() }
-        : { switched: false };
+  while (true) {
+    const selection = await selectModelInSession(ui, active);
+    if (selection.keepCurrent) {
+      ui.showNote("Keeping the current model.");
+      return { switched: false };
     }
-    ui.showNote(
-      `${selection.option.label} isn't configured yet. /exit and run aegis init to set up credentials for a new provider.`
-    );
+
+    const input = inputFromStoredConfig(selection.option);
+    if (!input) {
+      if (selection.option.provider === "custom") {
+        const result = await configureAndValidate(selection.option, {
+          preferStored: false,
+          cancelReturns: true,
+        });
+        return result === "saved"
+          ? { switched: true, active: getActiveProviderConfig() }
+          : { switched: false };
+      }
+      ui.showNote(
+        `${selection.option.label} isn't configured yet. /exit and run aegis init to set up credentials for a new provider.`
+      );
+      return { switched: false };
+    }
+
+    const result = await validateProviderConfig(input, selection.option, {
+      mode: "session",
+      ui,
+    });
+    if (result === "saved") {
+      return { switched: true, active: getActiveProviderConfig() };
+    }
+    if (result === "pick-again") {
+      continue;
+    }
+    if (result === "auth") {
+      ui.showNote("Staying on the current model.");
+    }
     return { switched: false };
   }
-
-  const provider = providerFromInput(input);
-  ui.showNote(`Verifying ${selection.option.label}...`);
-  const validation = await provider.validate();
-  if (!validation.ok) {
-    const detail = validation.detail ? ` - ${validation.detail}` : "";
-    const reason =
-      validation.reason === "auth"
-        ? `${provider.name} rejected the configured credentials`
-        : `Couldn't verify with ${provider.name}${detail}`;
-    ui.showNote(`${reason}. Staying on the current model.`);
-    return { switched: false };
-  }
-
-  saveProviderConfig(input);
-  return { switched: true, active: getActiveProviderConfig() };
 }
 
 async function selectModelInSession(
-  ui: TerminalUI,
+  ui: ModelSwitchUI,
   active: ActiveProviderConfig
 ): Promise<ModelSelection> {
   const currentIndex = currentModelIndex(active);
@@ -288,47 +306,81 @@ async function configureAndValidate(
       }
       throw err;
     }
-    const provider = providerFromInput(input);
+    const result = await validateProviderConfig(input, option, {
+      mode: "console",
+      cancelReturns: options.cancelReturns,
+    });
+    if (result === "saved" || result === "pick-again" || result === "canceled") {
+      return result;
+    }
+    if (result === "auth") {
+      input = null;
+    }
+  }
+}
 
-    while (true) {
-      console.log(`\n  Verifying ${option.label}...`);
-      const validation = await provider.validate();
-      if (validation.ok) {
-        saveProviderConfig(input);
-        console.log("  Saved to ~/.aegis/config.json.\n");
-        return "saved";
-      }
+async function validateProviderConfig(
+  input: ProviderConfigInput,
+  option: ModelOption,
+  surface: RecoverySurface
+): Promise<ValidationResult> {
+  const provider = providerFactory(input);
 
-      if (validation.reason === "auth") {
-        console.log(
-          `  ${provider.name} rejected those credentials. Re-enter them to try again.`
-        );
-        input = null;
-        break;
-      }
+  while (true) {
+    showValidationMessage(surface, `Verifying ${option.label}...`);
+    const validation = await provider.validate();
+    if (validation.ok) {
+      saveProviderConfig(input);
+      showValidationMessage(surface, "Saved to ~/.aegis/config.json.");
+      return "saved";
+    }
 
-      const recovery = await promptTransportRecovery(provider, {
+    if (validation.reason === "auth") {
+      showValidationMessage(
+        surface,
+        surface.mode === "console"
+          ? `${provider.name} rejected those credentials. Re-enter them to try again.`
+          : `${provider.name} rejected the configured credentials.`
+      );
+      return "auth";
+    }
+
+    const recovery = await promptTransportRecovery(
+      provider,
+      {
         ok: false,
         reason: "transport",
         ...(validation.detail ? { detail: validation.detail } : {}),
-      });
-      if (recovery === "retry") {
-        continue;
-      }
-      if (recovery === "save") {
-        saveProviderConfig(input);
-        console.log("  Saved to ~/.aegis/config.json without validation.\n");
-        return "saved";
-      }
-      if (recovery === "pick-again") {
-        return "pick-again";
-      }
-      if (options.cancelReturns) {
-        return "canceled";
-      }
-      throw new AegisExit(130, "Provider setup canceled.");
+      },
+      surface
+    );
+    if (recovery === "retry") {
+      continue;
     }
+    if (recovery === "save") {
+      saveProviderConfig(input);
+      showValidationMessage(
+        surface,
+        "Saved to ~/.aegis/config.json without validation."
+      );
+      return "saved";
+    }
+    if (recovery === "pick-again") {
+      return "pick-again";
+    }
+    if (surface.mode === "session" || surface.cancelReturns) {
+      return "canceled";
+    }
+    throw new AegisExit(130, "Provider setup canceled.");
   }
+}
+
+function showValidationMessage(surface: RecoverySurface, message: string): void {
+  if (surface.mode === "session") {
+    surface.ui.showNote(message);
+    return;
+  }
+  console.log(`  ${message}`);
 }
 
 function currentModelIndex(active: ActiveProviderConfig): number {
@@ -486,13 +538,30 @@ async function promptForGoogleConfig(
 
 async function promptTransportRecovery(
   provider: LLMProvider,
-  validation: { ok: false; reason: "transport"; detail?: string }
+  validation: { ok: false; reason: "transport"; detail?: string },
+  surface: RecoverySurface
 ): Promise<"retry" | "pick-again" | "save" | "abort"> {
-  console.log(
-    `  Couldn't verify with ${provider.name}${
-      validation.detail ? ` - ${validation.detail}` : ""
-    }. The credentials were not rejected; the request did not complete.`
-  );
+  const message = `Couldn't verify with ${provider.name}${
+    validation.detail ? ` - ${validation.detail}` : ""
+  }. The credentials were not rejected; the request did not complete.`;
+  if (surface.mode === "session") {
+    surface.ui.showNote(message);
+    const result = await surface.ui.selectFromMenu({
+      title: "Choose how to handle the validation failure.",
+      options: [
+        { label: "Retry validation" },
+        { label: "Pick a different model" },
+        { label: "Save anyway" },
+        { label: "Abort" },
+      ],
+      allowCancel: true,
+      cancelLabel: "press Enter or Esc to abort",
+    });
+    if ("canceled" in result) return "abort";
+    return recoveryActionForIndex(result.index);
+  }
+
+  console.log(`  ${message}`);
   console.log("");
   console.log("  1. Retry validation");
   console.log("  2. Pick a different model");
@@ -520,7 +589,22 @@ async function promptTransportRecovery(
   }
 }
 
-function providerFromInput(input: ProviderConfigInput): LLMProvider {
+function recoveryActionForIndex(
+  index: number
+): "retry" | "pick-again" | "save" | "abort" {
+  switch (index) {
+    case 0:
+      return "retry";
+    case 1:
+      return "pick-again";
+    case 2:
+      return "save";
+    default:
+      return "abort";
+  }
+}
+
+function defaultProviderFromInput(input: ProviderConfigInput): LLMProvider {
   switch (input.provider) {
     case "anthropic":
       return new AnthropicProvider(input.apiKey, input.model);
