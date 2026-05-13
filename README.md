@@ -70,6 +70,10 @@ Type `/exit` at any point to leave the session without writing changes.
 
 Aegis is provider-agnostic. The same discovery conversation runs against Anthropic, OpenAI, Google Gemini, DeepSeek, or any local/open-source model served through an OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp server, vLLM).
 
+<p align="center">
+  <img src="assets/model-selection-local.png" alt="Aegis init showing nine model options including local open-source models, with the user selecting option 9 and gemma4:26b conducting the discovery conversation" width="900" />
+</p>
+
 More importantly, you can swap models mid-session with `/model` without losing the conversation. The new model reads everything the prior one produced and picks up from the same state. Models hop in, look at the work in progress, and continue.
 
 Concretely: drive the substantive discovery with one model, switch to a second model to review the playback before extraction, bring in a third for a second opinion on a contested architectural choice — all inside the same session, with the full prior context intact. The new provider becomes the default for your next `aegis init` unless you switch again.
