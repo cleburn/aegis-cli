@@ -42,7 +42,7 @@ aegis explain
 aegis validate
 ```
 
-On first run, Aegis asks you to pick a model explicitly. It supports Anthropic, OpenAI, Google, DeepSeek, and local/open-source models served through an OpenAI-compatible local server such as Ollama, LM Studio, llama.cpp server, or vLLM. API keys are stored per provider in `~/.aegis/config.json`, and one provider is marked active.
+On first run, Aegis asks you to pick a model. It supports Anthropic, OpenAI, Google Gemini, DeepSeek, and local/open-source models. API keys are stored per provider in `~/.aegis/config.json`, and one provider is marked active. *Note: Google Gemini allows OAuth.* See [Multiple Models, One Session](#multiple-models-one-session) below for the full provider list and how to swap models mid-conversation.
 
 ## How `aegis init` Works
 
@@ -64,7 +64,17 @@ From there, the conversation is focused and specific. Aegis doesn't ask what lan
 
 The conversation moves fast. When Aegis has the full picture, your `.agentpolicy/` directory appears — complete, schema-validated, and ready for every agent that works here next.
 
-During a discovery session, type `/model` to switch models without leaving the conversation, or `/exit` to leave without writing changes. A model switch preserves the conversation history and saves the new provider as the active choice for future sessions.
+Type `/exit` at any point to leave the session without writing changes.
+
+## Multiple Models, One Session
+
+Aegis is provider-agnostic. The same discovery conversation runs against Anthropic, OpenAI, Google Gemini, DeepSeek, or any local/open-source model served through an OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp server, vLLM).
+
+More importantly, you can swap models mid-session with `/model` without losing the conversation. The new model reads everything the prior one produced and picks up from the same state. Models hop in, look at the work in progress, and continue.
+
+Concretely: drive the substantive discovery with one model, switch to a second model to review the playback before extraction, bring in a third for a second opinion on a contested architectural choice — all inside the same session, with the full prior context intact. The new provider becomes the default for your next `aegis init` unless you switch again.
+
+Model choice becomes a per-turn decision, not a per-session commitment.
 
 ## What Gets Generated
 
