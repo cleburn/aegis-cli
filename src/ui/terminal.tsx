@@ -44,6 +44,7 @@ const PROGRESS = chalk.hex("#FFD700");
 const GUTTER_WIDTH = 11;
 const MIN_WIDTH_FOR_ASSEMBLY = 54;
 const HEADER_RULE_WIDTH = 73;
+const STREAMING_VIEWPORT_RESERVE_ROWS = 8;
 
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
@@ -416,11 +417,16 @@ export function getStreamingResponseLines(
   // tail in the dynamic region; the full message is still committed
   // exactly once to static history when streaming ends.
   const limit = getStreamingLineLimit(terminalRows);
-  return lines.length <= limit ? lines : lines.slice(-limit);
+  if (lines.length <= limit) return lines;
+
+  const tail = lines.slice(-limit);
+  return tail.map((line, index) => ({ ...line, showLabel: index === 0 }));
 }
 
 export function getStreamingLineLimit(terminalRows: number): number {
-  return Math.max(3, terminalRows - 8);
+  // Reserve rows for the prompt, transient status/menu regions, and
+  // Ink's spacing so streaming stays inside the clearable viewport.
+  return Math.max(3, terminalRows - STREAMING_VIEWPORT_RESERVE_ROWS);
 }
 
 // ── Input Prompt Component ─────────────────────────────────────────

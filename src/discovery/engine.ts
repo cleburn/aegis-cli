@@ -221,6 +221,11 @@ export class DiscoveryEngine {
       // When a gate fails, the marker is dropped from the control
       // flow (still swallowed from the user-visible stream above)
       // and the conversation continues so the user can confirm.
+      //
+      // If the model omits the literal marker after an unambiguous
+      // user affirmation, shouldSalvageDiscoveryComplete provides a
+      // separate fallback gate that still requires no trailing
+      // question and positive completion intent before extraction.
 
       // Gitignore-consent substate machine.
       //

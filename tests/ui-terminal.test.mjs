@@ -65,7 +65,8 @@ test("long streaming response is bounded to the live tail", () => {
 
   assert.equal(getStreamingLineLimit(10), 3);
   assert.deepEqual(lines.map((line) => line.text), ["line-10", "line-11", "line-12"]);
-  assert.ok(lines.every((line) => line.showLabel === false));
+  assert.equal(lines[0].showLabel, true);
+  assert.ok(lines.slice(1).every((line) => line.showLabel === false));
 });
 
 test("streaming response recalculates its window for terminal resize", () => {
