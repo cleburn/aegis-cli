@@ -119,11 +119,12 @@ You need to gather enough to produce these files:
 
 **constitution.json** — Project identity, tech stack, principles, build commands
   - Project name, purpose (1-3 sentences), architecture pattern
+  - Identity grounding: distinguish what the user says about THIS PROJECT from what they say about dependencies, foundation layers, forks, upstream templates, examples, or adjacent context. Measure identity claims against the scan briefing. If the user's wording could refer to either the project or something it depends on, ask a clarifying question instead of encoding the inferred claim.
   - Module map: top-level modules/packages with paths, purposes, owners
   - Languages, frameworks, infrastructure, package managers, key libraries
   - Guiding principles (non-negotiable values, prioritized)
   - Build commands: install, build, test, lint, typecheck, dev, plus custom
-  - Required artifacts: files that must exist in the repo (README.md, LICENSE, CONTRIBUTING.md, etc.) with their purpose and where content should be derived from. Every project needs at minimum a README. Ask what documentation and licensing the project needs, and note where each file's content should come from (e.g. "derived from charter and constitution" or "standard MIT license text").
+  - Required artifacts: files that must exist in the repo (README.md, LICENSE, CONTRIBUTING.md, etc.) with their purpose and where content should be derived from. Every project needs at minimum a README. Establish the PROJECT'S license only from direct user confirmation or from a LICENSE/COPYING file included in the scan briefing. If the briefing contains license-file content, reference what you observed there during identity confirmation instead of asking the user to name it from scratch. Do not infer the project's license from adjacent mentions of dependency, foundation-layer, fork-upstream, or attribution-only licenses. Ask what documentation and licensing the project needs, and note where each file's content should come from (e.g. "derived from charter and constitution" or "standard MIT license text").
 
 **governance.json** — The rules every agent follows
   - Autonomy level per domain. Standard domains include: code_modification, dependency_management, file_creation, file_deletion, configuration_changes, infrastructure_changes, agent_recruitment, test_modification, documentation, refactoring. These are starting points — if the project involves areas that need their own governance (e.g. patient_data_access for healthcare, financial_transactions for fintech, pii_handling for projects with personal data, deployment for production releases), create project-specific domains. The schema accepts any domain string. Let the project's needs dictate the domains, not this list.  - File permissions: writable paths, read-only paths, forbidden paths
@@ -720,6 +721,23 @@ You will receive the full transcript. Extract everything policy-relevant and pro
 ${baselineSection}== SCHEMA CONTRACT ==
 
 The Aegis spec defines required skeleton fields that every tool in the ecosystem relies on. You MUST use these exact field names for the skeleton. You MAY add additional fields beyond the skeleton to capture domain-specific governance that emerged from the conversation — sensitivity tiers, cross-domain rules, forbidden actions, data policies, validation responsibilities, or anything else the project needs. The skeleton is the floor, not the ceiling.
+
+Typed-object arrays must stay object arrays. Never collapse these fields to arrays of strings, even when the conversation only named the item briefly:
+- constitution.project.module_map: [{ "path", "purpose", optional "owner" }]
+- constitution.project.required_artifacts: [{ "path", "purpose", optional "source" }]
+- constitution.tech_stack.key_libraries: [{ "name", "purpose", optional "scope" }]
+- constitution.principles: [{ "name", "statement", optional "priority" }]
+- constitution.build_commands.custom: [{ "name", "command", "purpose" }]
+- governance.permissions.sensitive_patterns: [{ "pattern", "reason" }]
+- governance.quality_gate.pre_commit.custom_checks: [{ "name", "command", optional "description" }]
+- governance.conventions: [{ "id", "scope", "rule", "enforcement", optional "value" }]
+- role.convention_overrides: [{ "convention_id", "override" }]
+- role.collaboration.shared_resources: [{ "path", "protocol" }]
+- ledger.write_protocol.procedure: [{ "step", "action" }]
+- ledger.tasks: [{ "id", "status", "summary", "assigned_role", "created_at" }]
+- ledger.locks: [{ "resource", "held_by", "acquired_at" }]
+
+If you only know a library name, artifact path, module path, or command string, still emit the required object and write a concise purpose/reason from context. Example: "pytest" becomes { "name": "pytest", "purpose": "Python test runner for the project" }, never "pytest".
 
 == CONSTITUTION SKELETON ==
 

@@ -781,6 +781,9 @@ export class DiscoveryEngine {
           extractionMessages,
           extractionPrompt
         );
+        if (isRecord(policy)) {
+          normalizeExtractedPolicyShapes(policy);
+        }
 
         this.ui.stopThinking();
 
@@ -1130,6 +1133,127 @@ export function isDiscoveryCompletionAffirmation(userInput: string): boolean {
   const finalAffirmationPattern =
     /(?:^|[\s.!])(?:yes|yeah|yep|yup|proceed|continue|go ahead|do it|draft it|draft those|draft them|write it|write those|write them|ship it|let's go|let's do it|confirmed|confirm|looks good|sounds good|sounds right|that works|that's right|exactly|correct|agreed|approved)\s*[.!]*$/u;
   return finalAffirmationPattern.test(trimmed);
+}
+
+export function normalizeExtractedPolicyShapes(
+  policy: Partial<NonNullable<DiscoveryResult["policy"]>>
+): void {
+  normalizeStringArray(
+    getObjectPath(policy.constitution, ["project"]),
+    "module_map",
+    (value) => ({ path: value, purpose: "Project module identified during discovery." })
+  );
+  normalizeStringArray(
+    getObjectPath(policy.constitution, ["project"]),
+    "required_artifacts",
+    (value) => ({ path: value, purpose: "Required project artifact identified during discovery." })
+  );
+  normalizeStringArray(
+    getObjectPath(policy.constitution, ["tech_stack"]),
+    "key_libraries",
+    (value) => ({ name: value, purpose: "Important library identified during discovery." })
+  );
+  normalizeStringArray(policy.constitution, "principles", (value) => ({
+    name: slugifyPolicyId(value),
+    statement: value,
+  }));
+  normalizeStringArray(
+    getObjectPath(policy.constitution, ["build_commands"]),
+    "custom",
+    (value) => ({
+      name: slugifyPolicyId(value),
+      command: value,
+      purpose: "Custom project command identified during discovery.",
+    })
+  );
+
+  const permissions = getObjectPath(policy.governance, ["permissions"]);
+  normalizeStringArray(permissions, "sensitive_patterns", (value) => ({
+    pattern: value,
+    reason: "Sensitive content pattern identified during discovery.",
+  }));
+  const preCommit = getObjectPath(policy.governance, ["quality_gate", "pre_commit"]);
+  normalizeStringArray(preCommit, "custom_checks", (value) => ({
+    name: slugifyPolicyId(value),
+    command: value,
+    description: "Custom quality check identified during discovery.",
+  }));
+  normalizeStringArray(policy.governance, "conventions", (value) => ({
+    id: slugifyPolicyId(value),
+    scope: "global",
+    rule: slugifyPolicyId(value),
+    value,
+    enforcement: "preferred",
+  }));
+
+  if (isRecord(policy.roles)) {
+    for (const role of Object.values(policy.roles)) {
+      if (!isRecord(role)) continue;
+      normalizeStringArray(role, "convention_overrides", (value) => ({
+        convention_id: slugifyPolicyId(value),
+        override: { value },
+      }));
+      const collaboration = getObjectPath(role, ["collaboration"]);
+      normalizeStringArray(collaboration, "shared_resources", (value) => ({
+        path: value,
+        protocol: "coordinate",
+      }));
+    }
+  }
+
+  normalizeStringArray(
+    getObjectPath(policy.ledger, ["write_protocol"]),
+    "procedure",
+    (value, index) => ({ step: index + 1, action: value })
+  );
+  normalizeStringArray(policy.ledger, "tasks", (value, index) => ({
+    id: `task_${String(index + 1).padStart(3, "0")}`,
+    status: "pending",
+    summary: value,
+    assigned_role: "default",
+    created_at: "1970-01-01T00:00:00.000Z",
+  }));
+  normalizeStringArray(policy.ledger, "locks", (value) => ({
+    resource: value,
+    held_by: "default",
+    acquired_at: "1970-01-01T00:00:00.000Z",
+  }));
+}
+
+function getObjectPath(
+  root: Record<string, unknown> | undefined,
+  pathParts: string[]
+): Record<string, unknown> | undefined {
+  let current: unknown = root;
+  for (const part of pathParts) {
+    if (!isRecord(current)) return undefined;
+    current = current[part];
+  }
+  return isRecord(current) ? current : undefined;
+}
+
+function normalizeStringArray(
+  parent: Record<string, unknown> | undefined,
+  key: string,
+  toObject: (value: string, index: number) => Record<string, unknown>
+): void {
+  if (!parent || !Array.isArray(parent[key])) return;
+  parent[key] = parent[key].map((entry, index) =>
+    typeof entry === "string" ? toObject(entry, index) : entry
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function slugifyPolicyId(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return /^[a-z]/.test(slug) ? slug : `item_${slug || "entry"}`;
 }
 
 function hasCompletionIntent(response: string): boolean {

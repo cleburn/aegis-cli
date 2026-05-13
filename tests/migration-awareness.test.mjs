@@ -64,3 +64,27 @@ test("planted deprecation entry is detected and surfaced", () => {
   assert.match(prompt, /Do not silently rewrite/);
   assert.match(prompt, /session transcript records what changed and why/);
 });
+
+test("scan briefing grounds project license in observed license files", () => {
+  const scan = baseScan();
+  scan.fileContents = [
+    {
+      path: "LICENSE",
+      content: "MIT License\n\nCopyright GitHub, Inc.",
+      truncated: false,
+    },
+    {
+      path: "README.md",
+      content: "Uses an Apache-2.0 foundation layer with attribution.",
+      truncated: false,
+    },
+  ];
+
+  const briefing = formatScanBriefing(scan);
+  const prompt = buildDiscoverySystemPrompt(scan);
+
+  assert.match(briefing, /PROJECT LICENSE EVIDENCE/);
+  assert.match(briefing, /License file\(s\) read: LICENSE/);
+  assert.match(briefing, /Do not infer the project license from adjacent mentions/);
+  assert.match(prompt, /Establish the PROJECT'S license only from direct user confirmation or from a LICENSE\/COPYING file/);
+});

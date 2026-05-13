@@ -180,6 +180,10 @@ const HIGH_VALUE_FILES: string[] = [
   "README.md",
   "README",
   "readme.md",
+  "LICENSE",
+  "LICENSE.md",
+  "LICENSE.txt",
+  "COPYING",
   "AGENT.md",
   "AGENTS.md",
   "CLAUDE.md",
@@ -1685,6 +1689,15 @@ export function formatScanBriefing(scan: ScanResult): string {
     }
   }
 
+  const licenseFiles = scan.fileContents.filter((file) => isLicenseFilePath(file.path));
+  if (licenseFiles.length > 0) {
+    lines.push("== PROJECT LICENSE EVIDENCE ==");
+    lines.push(
+      `License file(s) read: ${licenseFiles.map((file) => file.path).join(", ")}. Treat these file contents as the grounded source for the PROJECT'S license. Do not infer the project license from adjacent mentions of dependency, foundation-layer, or upstream licenses; confirm any conflict with the human.`
+    );
+    lines.push("");
+  }
+
   // ── Existing policy ──────────────────────────────────────────────
   // Only render the full "EXISTING CONTENTS" section when the loaded
   // set actually constitutes a usable baseline. Schema-drifted JSON
@@ -1726,4 +1739,8 @@ export function formatScanBriefing(scan: ScanResult): string {
   }
 
   return lines.join("\n");
+}
+
+function isLicenseFilePath(filePath: string): boolean {
+  return /^(license|license\.(md|txt)|copying)$/i.test(filePath);
 }

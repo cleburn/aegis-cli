@@ -44,10 +44,6 @@ const PROGRESS = chalk.hex("#FFD700");
 const GUTTER_WIDTH = 11;
 const MIN_WIDTH_FOR_ASSEMBLY = 54;
 const HEADER_RULE_WIDTH = 73;
-const STREAMING_VIEWPORT_RESERVE_ROWS = 8;
-// Six lines is enough to show active streaming progress without
-// letting Ink's dynamic region grow tall enough to leak into scrollback.
-const STREAMING_MAX_LIVE_TAIL_LINES = 6;
 
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
@@ -56,6 +52,8 @@ const UPDATE_COMMAND = "npm install -g aegis-cli@latest";
 // ── Types ──────────────────────────────────────────────────────────
 type ConversationItem =
   | { type: "aegis"; message: string }
+  | { type: "aegis_line"; line: ConversationWrapLine }
+  | { type: "aegis_end" }
   | { type: "user"; message: string }
   | { type: "note"; message: string }
   | { type: "heading"; message: string }
@@ -78,7 +76,7 @@ type MenuRequest = {
 
 interface AppBridge {
   addToHistory: (item: ConversationItem) => void;
-  setStreamBuffer: (text: string) => void;
+  setStreamLines: (lines: ConversationWrapLine[]) => void;
   setIsStreaming: (v: boolean) => void;
   setIsThinking: (v: boolean) => void;
   setThinkingMode: (mode: "thinking" | "extraction") => void;
@@ -216,6 +214,34 @@ function WrappedLines({
 
 function AegisTurn({ message }: { message: string }) {
   return <WrappedLines text={message} barColor="#5B8DEF" label="aegis" />;
+}
+
+function AegisLine({ line }: { line: ConversationWrapLine }) {
+  return (
+    <Box paddingLeft={2}>
+      <Text color="#5B8DEF">▎ </Text>
+      {line.showLabel ? (
+        <>
+          <Text color="#5B8DEF">aegis</Text>
+          <Text>{"  "}</Text>
+        </>
+      ) : (
+        <Text>{"       "}</Text>
+      )}
+      <Text>{line.text}</Text>
+    </Box>
+  );
+}
+
+function AegisEnd() {
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      <Box>
+        <Text color="#5B8DEF">▎</Text>
+      </Box>
+      <Text>{" "}</Text>
+    </Box>
+  );
 }
 
 function UserTurn({ message }: { message: string }) {
@@ -379,13 +405,7 @@ export function nextThinkingFrameIndex(
 
 // ── Streaming Response Component ───────────────────────────────────
 
-function StreamingResponse({ text }: { text: string }) {
-  const lines = getStreamingResponseLines(
-    text,
-    getWrapWidth(),
-    process.stdout.rows || 24
-  );
-
+function StreamingResponse({ lines }: { lines: ConversationWrapLine[] }) {
   return (
     <Box flexDirection="column" paddingLeft={2}>
       {lines.map((line, i) => (
@@ -406,36 +426,23 @@ function StreamingResponse({ text }: { text: string }) {
   );
 }
 
-export function getStreamingResponseLines(
+export function getStreamingResponseFrame(
   text: string,
   width: number,
-  terminalRows: number
-): ConversationWrapLine[] {
+  final = false
+): { committed: ConversationWrapLine[]; live: ConversationWrapLine[] } {
   const lines = wrapConversationTurn(text, width);
-  // Ink can clear dynamic output reliably while it stays small. If
-  // streaming is allowed to grow toward the terminal height, early
-  // lines can scroll into permanent scrollback before the bounded tail
-  // applies; when endAegisResponse appends the full static turn, those
-  // stale streamed lines look like duplicated content. Keep only a
-  // small live tail from the first frames; the full message is still
-  // committed exactly once to static history when streaming ends.
-  const limit = getStreamingLineLimit(terminalRows);
-  if (lines.length <= limit) return lines;
+  if (final) return { committed: lines, live: [] };
+  if (lines.length <= 1) return { committed: [], live: lines };
 
-  const tail = lines.slice(-limit);
-  return tail.map((line, index) => ({ ...line, showLabel: index === 0 }));
-}
-
-export function getStreamingLineLimit(terminalRows: number): number {
-  // Reserve rows for the prompt, transient status/menu regions, and
-  // Ink's spacing so streaming stays inside the clearable viewport.
-  return Math.max(
-    1,
-    Math.min(
-      STREAMING_MAX_LIVE_TAIL_LINES,
-      terminalRows - STREAMING_VIEWPORT_RESERVE_ROWS
-    )
-  );
+  // Completed wrapped lines move into Static history as they form.
+  // Only the current in-progress line stays dynamic, so long streams
+  // visibly advance through scrollback once and never get re-rendered
+  // as a duplicate full static block at completion.
+  return {
+    committed: lines.slice(0, -1),
+    live: lines.slice(-1),
+  };
 }
 
 // ── Input Prompt Component ─────────────────────────────────────────
@@ -576,7 +583,7 @@ function MenuPrompt({ request }: { request: MenuRequest }) {
 
 function AegisApp({ bridge }: { bridge: AppBridge }) {
   const [history, setHistory] = useState<ConversationItem[]>([]);
-  const [streamBuffer, setStreamBuffer] = useState("");
+  const [streamLines, setStreamLines] = useState<ConversationWrapLine[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingMode, setThinkingMode] = useState<"thinking" | "extraction">("thinking");
@@ -588,7 +595,7 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
   // Expose state setters to the bridge
   useEffect(() => {
     bridge.addToHistory = (item) => setHistory((h) => [...h, item]);
-    bridge.setStreamBuffer = setStreamBuffer;
+    bridge.setStreamLines = setStreamLines;
     bridge.setIsStreaming = setIsStreaming;
     bridge.setIsThinking = setIsThinking;
     bridge.setThinkingMode = setThinkingMode;
@@ -605,6 +612,10 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
           switch (item.type) {
             case "aegis":
               return <AegisTurn key={index} message={item.message} />;
+            case "aegis_line":
+              return <AegisLine key={index} line={item.line} />;
+            case "aegis_end":
+              return <AegisEnd key={index} />;
             case "user":
               return <UserTurn key={index} message={item.message} />;
             case "intro":
@@ -683,8 +694,8 @@ function AegisApp({ bridge }: { bridge: AppBridge }) {
       </Static>
 
       {/* Dynamic region — streaming response */}
-      {isStreaming && streamBuffer.length > 0 && (
-        <StreamingResponse text={streamBuffer} />
+      {isStreaming && streamLines.length > 0 && (
+        <StreamingResponse lines={streamLines} />
       )}
 
       {/* Dynamic region — thinking animation */}
@@ -705,12 +716,17 @@ export class TerminalUI {
   private bridge: AppBridge;
   private inkInstance: ReturnType<typeof render> | null = null;
   private streamBuffer = "";
+  private streamCommittedLineCount = 0;
+  // Streaming commits wrapped lines into Static history as they
+  // complete; freeze width for the turn so a terminal resize cannot
+  // rewrap already-committed text into duplicate or skipped lines.
+  private streamWrapWidth = getWrapWidth();
   private _thinkingTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.bridge = {
       addToHistory: () => {},
-      setStreamBuffer: () => {},
+      setStreamLines: () => {},
       setIsStreaming: () => {},
       setIsThinking: () => {},
       setThinkingMode: () => {},
@@ -770,22 +786,36 @@ export class TerminalUI {
 
   startAegisResponse(): void {
     this.streamBuffer = "";
-    this.bridge.setStreamBuffer("");
+    this.streamCommittedLineCount = 0;
+    this.streamWrapWidth = getWrapWidth();
+    this.bridge.setStreamLines([]);
     this.bridge.setIsStreaming(true);
   }
 
   streamToken(token: string): void {
     this.streamBuffer += token;
-    this.bridge.setStreamBuffer(this.streamBuffer);
+    const frame = getStreamingResponseFrame(this.streamBuffer, this.streamWrapWidth);
+    const newCommitted = frame.committed.slice(this.streamCommittedLineCount);
+    for (const line of newCommitted) {
+      this.bridge.addToHistory({ type: "aegis_line", line });
+    }
+    this.streamCommittedLineCount = frame.committed.length;
+    this.bridge.setStreamLines(frame.live);
   }
 
   endAegisResponse(): void {
     if (this.streamBuffer.length > 0) {
-      this.bridge.addToHistory({ type: "aegis", message: this.streamBuffer });
+      const frame = getStreamingResponseFrame(this.streamBuffer, this.streamWrapWidth, true);
+      const remaining = frame.committed.slice(this.streamCommittedLineCount);
+      for (const line of remaining) {
+        this.bridge.addToHistory({ type: "aegis_line", line });
+      }
+      this.bridge.addToHistory({ type: "aegis_end" });
     }
     this.bridge.setIsStreaming(false);
-    this.bridge.setStreamBuffer("");
+    this.bridge.setStreamLines([]);
     this.streamBuffer = "";
+    this.streamCommittedLineCount = 0;
   }
 
   async getUserInput(

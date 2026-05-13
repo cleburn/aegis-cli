@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  getStreamingLineLimit,
-  getStreamingResponseLines,
+  getStreamingResponseFrame,
   nextThinkingFrameIndex,
   wrapConversationTurn,
   wrapText,
@@ -54,61 +53,60 @@ test("thinking frames loop", () => {
 
 test("short streaming response keeps full dynamic render", () => {
   const message = "Short streamed response.";
-  const lines = getStreamingResponseLines(message, 80, 24);
+  const frame = getStreamingResponseFrame(message, 80);
 
-  assert.deepEqual(lines, [{ text: message, showLabel: true }]);
+  assert.deepEqual(frame.committed, []);
+  assert.deepEqual(frame.live, [{ text: message, showLabel: true }]);
 });
 
-test("short multi-line streaming response keeps full dynamic render", () => {
+test("streaming commits completed lines while keeping current line live", () => {
   const message = Array.from({ length: 4 }, (_, index) => `line-${index + 1}`).join("\n");
-  const lines = getStreamingResponseLines(message, 80, 24);
+  const frame = getStreamingResponseFrame(message, 80);
 
-  assert.deepEqual(lines.map((line) => line.text), ["line-1", "line-2", "line-3", "line-4"]);
-  assert.equal(lines[0].showLabel, true);
-  assert.ok(lines.slice(1).every((line) => line.showLabel === false));
+  assert.deepEqual(frame.committed.map((line) => line.text), ["line-1", "line-2", "line-3"]);
+  assert.deepEqual(frame.live.map((line) => line.text), ["line-4"]);
+  assert.equal(frame.committed[0].showLabel, true);
+  assert.ok(frame.committed.slice(1).every((line) => line.showLabel === false));
+  assert.equal(frame.live[0].showLabel, false);
 });
 
-test("long streaming response is bounded to the live tail", () => {
+test("long streaming response incrementally commits across the full message", () => {
   const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
-  const lines = getStreamingResponseLines(message, 80, 14);
+  const frame = getStreamingResponseFrame(message, 80);
 
-  assert.equal(getStreamingLineLimit(14), 6);
-  assert.deepEqual(lines.map((line) => line.text), [
+  assert.deepEqual(frame.committed.map((line) => line.text), [
+    "line-1",
+    "line-2",
+    "line-3",
+    "line-4",
+    "line-5",
+    "line-6",
     "line-7",
     "line-8",
     "line-9",
     "line-10",
     "line-11",
-    "line-12",
   ]);
-  assert.equal(lines[0].showLabel, true);
-  assert.ok(lines.slice(1).every((line) => line.showLabel === false));
+  assert.deepEqual(frame.live.map((line) => line.text), ["line-12"]);
+  assert.equal(frame.committed[0].showLabel, true);
+  assert.ok(frame.committed.slice(1).every((line) => line.showLabel === false));
 });
 
 test("streaming response recalculates its window for terminal resize", () => {
-  const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
-  const compact = getStreamingResponseLines(message, 80, 10);
-  const expanded = getStreamingResponseLines(message, 80, 20);
+  const message = "alpha beta gamma delta epsilon zeta";
+  const compact = getStreamingResponseFrame(message, 12);
+  const expanded = getStreamingResponseFrame(message, 80);
 
-  assert.equal(compact.length, 2);
-  assert.equal(expanded.length, 6);
-  assert.equal(expanded[0].showLabel, true);
+  assert.ok(compact.committed.length > expanded.committed.length);
+  assert.deepEqual(expanded.committed, []);
+  assert.equal(expanded.live[0].showLabel, true);
 });
 
-test("long streaming response never renders the static first line in the live tail", () => {
+test("final streaming frame commits all lines exactly once", () => {
   const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
-  const liveTail = getStreamingResponseLines(message, 80, 24);
-  const finalStatic = wrapConversationTurn(message, 80);
+  const frame = getStreamingResponseFrame(message, 80, true);
 
-  assert.equal(getStreamingLineLimit(24), 6);
-  assert.deepEqual(liveTail.map((line) => line.text), [
-    "line-7",
-    "line-8",
-    "line-9",
-    "line-10",
-    "line-11",
-    "line-12",
-  ]);
-  assert.equal(finalStatic[0].text, "line-1");
-  assert.ok(liveTail.every((line) => line.text !== finalStatic[0].text));
+  assert.deepEqual(frame.live, []);
+  assert.deepEqual(frame.committed.map((line) => line.text), wrapConversationTurn(message, 80).map((line) => line.text));
+  assert.equal(new Set(frame.committed.map((line) => line.text)).size, 12);
 });
