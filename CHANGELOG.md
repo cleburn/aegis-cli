@@ -4,6 +4,15 @@ All notable changes to `aegis-cli` are documented here. The format is based on [
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-05-13
+
+### Added
+- **`gemini-2.5-pro` as a second Google Gemini menu option.** Aegis previously single-pointed Gemini support on `gemini-3.1-pro-preview`. Preview endpoints carry no SLA guarantee from Google — when the preview model is throttled at Google's serving layer (which can happen unpredictably), Gemini becomes unavailable in Aegis even though other variants on the same OAuth credentials work. The new GA-stable `gemini-2.5-pro` entry gives users a reliable fallback path; the existing 3.1 Pro Preview remains selectable for bleeding-edge use.
+
+### Changed
+- **Mid-session `/model` recovery now mirrors initial model selection on validate failures.** Previously, `/model` selecting a provider whose `validate()` returned a transport/capacity-class error (e.g. HTTP 503) printed a generic "Couldn't verify... Staying on the current model" message and silently bailed back to the conversation. Now both flows route through a shared validation function and surface the same four-option recovery menu (Retry validation / Pick a different model / Save anyway / Abort) with the same auth-vs-transport classifier wording. The user can recover from a transient capacity issue mid-session without exiting and restarting.
+- Google menu labels sharpened to communicate preview status: `Google Gemini 3.1` → `Google Gemini 3.1 Pro Preview`; the new GA entry shows as `Google Gemini 2.5 Pro`.
+
 ## [0.4.7] — 2026-05-12
 
 ### Added
@@ -174,7 +183,8 @@ The Path B release: agent-agnostic, multi-provider, Node 22.3.0+.
 
 Pre-Path-B iteration phase (versions 0.1.12 through 0.2.39). Forty-plus releases of rapid early-development iteration on the single-provider (Anthropic) CLI, including the initial discovery engine, the first `.agentpolicy/` writer, schema scaffolding, and the foundation for the multi-provider refactor that became 0.3.0. Tag history is preserved in the repository; no per-version release notes are backfilled for this phase.
 
-[Unreleased]: https://github.com/cleburn/aegis-cli/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/cleburn/aegis-cli/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/cleburn/aegis-cli/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/cleburn/aegis-cli/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/cleburn/aegis-cli/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/cleburn/aegis-cli/compare/v0.4.4...v0.4.5
