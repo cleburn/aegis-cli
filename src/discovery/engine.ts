@@ -1116,6 +1116,9 @@ export function isDiscoveryCompletionAffirmation(userInput: string): boolean {
   if (isSimpleAffirmative(userInput)) return true;
   if (trimmed.length === 0 || trimmed.includes("?")) return false;
 
+  // This deliberately differs from isSimpleAffirmative's blocker list:
+  // long prose can contain words like "not" while still ending in a
+  // clean go-ahead, so this gate focuses on late-change action signals.
   const lateChangeSignals = [
     " but ", "actually", "however", "wait", "hmm",
     "except", "instead", "rather", "one more", "one thing",

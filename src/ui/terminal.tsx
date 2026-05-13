@@ -45,6 +45,8 @@ const GUTTER_WIDTH = 11;
 const MIN_WIDTH_FOR_ASSEMBLY = 54;
 const HEADER_RULE_WIDTH = 73;
 const STREAMING_VIEWPORT_RESERVE_ROWS = 8;
+// Six lines is enough to show active streaming progress without
+// letting Ink's dynamic region grow tall enough to leak into scrollback.
 const STREAMING_MAX_LIVE_TAIL_LINES = 6;
 
 // ── Brand Constants ────────────────────────────────────────────────
