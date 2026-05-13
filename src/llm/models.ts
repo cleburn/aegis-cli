@@ -7,7 +7,10 @@ export const MODEL_IDS = {
     "claude-sonnet-4-6",
   ],
   openai: ["gpt-5.5", "gpt-5.4"],
-  google: ["gemini-3.1-pro-preview"],
+  google: [
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-pro",
+  ],
   deepseek: ["deepseek-v4-pro", "deepseek-v4-flash"],
   custom: ["local-model"],
 } as const satisfies Record<ProviderId, readonly string[]>;
@@ -20,7 +23,8 @@ export const MODEL_OPTIONS = [
   { provider: "anthropic", model: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { provider: "openai", model: "gpt-5.5", label: "OpenAI GPT-5.5" },
   { provider: "openai", model: "gpt-5.4", label: "OpenAI GPT-5.4" },
-  { provider: "google", model: "gemini-3.1-pro-preview", label: "Google Gemini 3.1" },
+  { provider: "google", model: "gemini-3.1-pro-preview", label: "Google Gemini 3.1 Pro Preview" },
+  { provider: "google", model: "gemini-2.5-pro", label: "Google Gemini 2.5 Pro" },
   { provider: "deepseek", model: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
   { provider: "deepseek", model: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
   { provider: "custom", model: "local-model", label: "Local / open-source model (Gemma, Qwen, Kimi, etc...)" },

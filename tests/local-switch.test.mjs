@@ -230,11 +230,71 @@ test("/model transport recovery can pick a different model", async () => {
   }
 });
 
+test("/model Google variants use the transport recovery menu", async () => {
+  const suffix = `localSwitchGoogleVariants=${Date.now()}-${Math.random()}`;
+  const install = await import(
+    `${pathToFileURL(path.resolve("dist/src/llm/install.js")).href}?${suffix}`
+  );
+  const models = await import(
+    `${pathToFileURL(path.resolve("dist/src/llm/models.js")).href}?${suffix}`
+  );
+  const googleVariants = models.MODEL_OPTIONS.filter(
+    (option) => option.provider === "google"
+  );
+
+  for (const option of googleVariants) {
+    setupModelSwitchConfig();
+    let capturedModel;
+    const menus = [];
+    const menuSelections = [
+      {
+        index: models.MODEL_OPTIONS.findIndex(
+          (candidate) =>
+            candidate.provider === "google" && candidate.model === option.model
+        ),
+      },
+      { index: 3 },
+    ];
+
+    const restoreProviderFactory = install.setProviderFactoryForTests((input) => {
+      assert.equal(input.provider, "google");
+      capturedModel = input.model;
+      return new SequenceValidateProvider([
+        { ok: false, reason: "transport", detail: "temporary validation failure" },
+      ], "Google");
+    });
+    try {
+      const result = await install.runModelSwitchFlow({
+        showNote: () => {},
+        selectFromMenu: async (request) => {
+          menus.push(request);
+          return menuSelections.shift();
+        },
+      });
+
+      assert.equal(result.switched, false);
+      assert.equal(capturedModel, option.model);
+      assert.deepEqual(
+        menus[1].options.map((item) => item.label),
+        [
+          "Retry validation",
+          "Pick a different model",
+          "Save anyway",
+          "Abort",
+        ]
+      );
+    } finally {
+      restoreProviderFactory();
+    }
+  }
+});
+
 class SequenceValidateProvider {
-  name = "OpenAI";
+  name;
   #results;
 
-  constructor(results) {
+  constructor(results, name = "OpenAI") {
+    this.name = name;
     this.#results = [...results];
   }
 
@@ -269,6 +329,11 @@ function setupModelSwitchConfig() {
       openai: {
         apiKey: "openai-key",
         model: "gpt-5.5",
+      },
+      google: {
+        authMethod: "apiKey",
+        apiKey: "google-key",
+        model: "gemini-2.5-pro",
       },
     },
   });
