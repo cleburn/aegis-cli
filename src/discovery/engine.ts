@@ -338,6 +338,22 @@ export class DiscoveryEngine {
         };
       }
 
+      if (shouldSalvageDiscoveryComplete(userInput, response)) {
+        process.stderr.write(
+          "[aegis] auto-injected discovery completion — prior user turn affirmed and Aegis response showed completion intent without a literal marker\n"
+        );
+        this.ui.showNote("Drafting your policy files...");
+
+        const { policy, failure } = await this.extractPolicy();
+
+        return {
+          transcript: [...this.messages],
+          policy,
+          status: policy ? "completed" : "extraction_failed",
+          extractionFailure: failure,
+        };
+      }
+
     }
   }
 
@@ -996,7 +1012,7 @@ export async function handleDiscoverySlashCommand(
  * Strips completion markers first (they can arrive after the question),
  * then checks the final 200 characters for a "?".
  */
-function containsTrailingQuestion(response: string): boolean {
+export function containsTrailingQuestion(response: string): boolean {
   const stripped = response
     .replace(/\[DISCOVERY_COMPLETE\]/g, "")
     .replace(/\[NO_CHANGES\]/g, "")
@@ -1025,7 +1041,7 @@ function containsTrailingQuestion(response: string): boolean {
  * - The message must contain at least one recognized affirmative
  *   token — "yes", "proceed", "looks good", "ship it", and similar.
  */
-function isSimpleAffirmative(userInput: string): boolean {
+export function isSimpleAffirmative(userInput: string): boolean {
   const trimmed = userInput.trim().toLowerCase();
   if (trimmed.length === 0 || trimmed.length > 80) return false;
   if (trimmed.includes("?")) return false;
@@ -1044,7 +1060,9 @@ function isSimpleAffirmative(userInput: string): boolean {
     "ok", "okay",
     "sure", "alright", "cool",
     "proceed", "continue", "go ahead",
-    "do it", "ship it", "let's go", "let's do it",
+    "do it", "draft it", "draft those", "draft them",
+    "write it", "write those", "write them",
+    "ship it", "let's go", "let's do it",
     "confirmed", "confirm",
     "looks good", "sounds good", "sounds right", "that works",
     "that's right", "exactly", "correct",
@@ -1052,6 +1070,85 @@ function isSimpleAffirmative(userInput: string): boolean {
     "👍", "🚀", "+1",
   ];
   return affirmativeTokens.some((t) => trimmed.includes(t));
+}
+
+/**
+ * Last-resort completion salvage for model responses that clearly
+ * acknowledge an affirmed wrap-up but omit the literal control marker.
+ *
+ * The checks are deliberately separate and ordered as hard gates:
+ * a literal marker path owns marker-bearing responses, the user must
+ * have affirmed, Aegis must not be asking a question, and the text
+ * must contain completion-intent wording. Removing any one gate is a
+ * review-visible behavior change, not a tweak to a combined regex.
+ */
+export function shouldSalvageDiscoveryComplete(
+  userInput: string,
+  response: string
+): boolean {
+  if (
+    response.includes("[DISCOVERY_COMPLETE]") ||
+    response.includes("[NO_CHANGES]")
+  ) {
+    return false;
+  }
+  if (!isSimpleAffirmative(userInput)) return false;
+  if (containsTrailingQuestion(response)) return false;
+  if (!hasCompletionIntent(response)) return false;
+  return true;
+}
+
+function hasCompletionIntent(response: string): boolean {
+  const normalized = response.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  const blockerSignals = [
+    "not drafting",
+    "not ready",
+    "can't draft",
+    "cannot draft",
+    "won't draft",
+    "will not draft",
+    "before i draft",
+    "before drafting",
+  ];
+  if (blockerSignals.some((signal) => normalized.includes(signal))) {
+    return false;
+  }
+
+  const actionSignals = [
+    "drafting",
+    "draft now",
+    "drafting now",
+    "draft those",
+    "draft them",
+    "draft it",
+    "writing the policy",
+    "write the policy",
+    "writing your policy",
+    "compile the policy",
+    "compiling the policy",
+    "generating the policy",
+    "building the policy",
+    "creating .agentpolicy",
+    "drafting your policy files",
+    "writing your policy files",
+  ];
+  if (actionSignals.some((signal) => normalized.includes(signal))) {
+    return true;
+  }
+
+  const closingSignals = [
+    "good session",
+    "great session",
+    "solid session",
+    "productive session",
+    "we have what we need",
+    "i have what i need",
+    "i've got what i need",
+    "ready to draft",
+    "ready to write",
+  ];
+  return closingSignals.some((signal) => normalized.includes(signal));
 }
 
 /**
