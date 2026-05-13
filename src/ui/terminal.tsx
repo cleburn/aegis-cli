@@ -376,15 +376,18 @@ export function nextThinkingFrameIndex(
 // ── Streaming Response Component ───────────────────────────────────
 
 function StreamingResponse({ text }: { text: string }) {
-  const wrapped = wrapText(text, getWrapWidth());
-  const lines = wrapped.split("\n");
+  const lines = getStreamingResponseLines(
+    text,
+    getWrapWidth(),
+    process.stdout.rows || 24
+  );
 
   return (
     <Box flexDirection="column" paddingLeft={2}>
       {lines.map((line, i) => (
         <Box key={i}>
           <Text color="#5B8DEF">▎ </Text>
-          {i === 0 ? (
+          {line.showLabel ? (
             <>
               <Text color="#5B8DEF">aegis</Text>
               <Text>{"  "}</Text>
@@ -392,11 +395,32 @@ function StreamingResponse({ text }: { text: string }) {
           ) : (
             <Text>{"       "}</Text>
           )}
-          <Text>{line}</Text>
+          <Text>{line.text}</Text>
         </Box>
       ))}
     </Box>
   );
+}
+
+export function getStreamingResponseLines(
+  text: string,
+  width: number,
+  terminalRows: number
+): ConversationWrapLine[] {
+  const lines = wrapConversationTurn(text, width);
+  // Ink can clear dynamic output reliably while it stays within the
+  // managed viewport. If streaming renders more lines than the
+  // terminal can hold, older lines scroll into permanent scrollback;
+  // when endAegisResponse appends the full static turn, those stale
+  // streamed lines look like duplicated content. Keep only a live
+  // tail in the dynamic region; the full message is still committed
+  // exactly once to static history when streaming ends.
+  const limit = getStreamingLineLimit(terminalRows);
+  return lines.length <= limit ? lines : lines.slice(-limit);
+}
+
+export function getStreamingLineLimit(terminalRows: number): number {
+  return Math.max(3, terminalRows - 8);
 }
 
 // ── Input Prompt Component ─────────────────────────────────────────

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getStreamingLineLimit,
+  getStreamingResponseLines,
   nextThinkingFrameIndex,
   wrapConversationTurn,
   wrapText,
@@ -48,4 +50,30 @@ test("thinking frames loop", () => {
 
   assert.equal(index, 2);
   assert.equal(nextThinkingFrameIndex("thinking", index, 3), 0);
+});
+
+test("short streaming response keeps full dynamic render", () => {
+  const message = "Short streamed response.";
+  const lines = getStreamingResponseLines(message, 80, 24);
+
+  assert.deepEqual(lines, [{ text: message, showLabel: true }]);
+});
+
+test("long streaming response is bounded to the live tail", () => {
+  const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
+  const lines = getStreamingResponseLines(message, 80, 10);
+
+  assert.equal(getStreamingLineLimit(10), 3);
+  assert.deepEqual(lines.map((line) => line.text), ["line-10", "line-11", "line-12"]);
+  assert.ok(lines.every((line) => line.showLabel === false));
+});
+
+test("streaming response recalculates its window for terminal resize", () => {
+  const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
+  const compact = getStreamingResponseLines(message, 80, 10);
+  const expanded = getStreamingResponseLines(message, 80, 20);
+
+  assert.equal(compact.length, 3);
+  assert.equal(expanded.length, 12);
+  assert.equal(expanded[0].showLabel, true);
 });
