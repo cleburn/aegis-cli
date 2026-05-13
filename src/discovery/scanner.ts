@@ -183,7 +183,12 @@ const HIGH_VALUE_FILES: string[] = [
   "LICENSE",
   "LICENSE.md",
   "LICENSE.txt",
+  "LICENSE-MIT",
+  "LICENSE-APACHE",
+  "LICENSE-APACHE-2.0",
   "COPYING",
+  "COPYING.md",
+  "COPYING.txt",
   "AGENT.md",
   "AGENTS.md",
   "CLAUDE.md",
@@ -1742,5 +1747,5 @@ export function formatScanBriefing(scan: ScanResult): string {
 }
 
 function isLicenseFilePath(filePath: string): boolean {
-  return /^(license|license\.(md|txt)|copying)$/i.test(filePath);
+  return /^(license(?:[-._][a-z0-9][a-z0-9._-]*)?|copying(?:[-._][a-z0-9][a-z0-9._-]*)?)$/i.test(filePath);
 }

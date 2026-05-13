@@ -88,3 +88,24 @@ test("scan briefing grounds project license in observed license files", () => {
   assert.match(briefing, /Do not infer the project license from adjacent mentions/);
   assert.match(prompt, /Establish the PROJECT'S license only from direct user confirmation or from a LICENSE\/COPYING file/);
 });
+
+test("scan briefing recognizes dual-license filenames as license evidence", () => {
+  const scan = baseScan();
+  scan.fileContents = [
+    {
+      path: "LICENSE-MIT",
+      content: "MIT License",
+      truncated: false,
+    },
+    {
+      path: "LICENSE-APACHE",
+      content: "Apache License 2.0",
+      truncated: false,
+    },
+  ];
+
+  const briefing = formatScanBriefing(scan);
+
+  assert.match(briefing, /PROJECT LICENSE EVIDENCE/);
+  assert.match(briefing, /LICENSE-MIT, LICENSE-APACHE/);
+});
