@@ -206,7 +206,8 @@ export class DiscoveryEngine {
       // Completion markers can only fire after the user has explicitly
       // confirmed — but the form of confirmation differs per marker.
       // [DISCOVERY_COMPLETE] requires an affirmation of proposed
-      // changes ("yes", "proceed", "looks good"). [NO_CHANGES]
+      // changes ("yes", "proceed", "looks good", or a longer
+      // message that ends with "Draft it"). [NO_CHANGES]
       // requires an explicit statement that nothing needs to change
       // ("no changes", "nothing needs to change", "everything looks
       // good") — which overlaps partially with affirmatives but also
@@ -323,7 +324,7 @@ export class DiscoveryEngine {
       }
 
       if (response.includes("[DISCOVERY_COMPLETE]")) {
-        if (!isSimpleAffirmative(userInput) || containsTrailingQuestion(response)) {
+        if (!isDiscoveryCompletionAffirmation(userInput) || containsTrailingQuestion(response)) {
           process.stderr.write(
             "[aegis] ignored premature [DISCOVERY_COMPLETE] — no unambiguous user affirmation on record\n"
           );
@@ -1097,10 +1098,35 @@ export function shouldSalvageDiscoveryComplete(
   ) {
     return false;
   }
-  if (!isSimpleAffirmative(userInput)) return false;
+  if (!isDiscoveryCompletionAffirmation(userInput)) return false;
   if (containsTrailingQuestion(response)) return false;
   if (!hasCompletionIntent(response)) return false;
   return true;
+}
+
+/**
+ * Gate for discovery completion. Short standalone confirmations use
+ * isSimpleAffirmative; longer messages are accepted only when they
+ * end with an explicit final go-ahead and do not carry late-change
+ * signals, so "yes, but change X. Draft it." stays blocked while
+ * "those two clarifications are correct. Draft it." can close.
+ */
+export function isDiscoveryCompletionAffirmation(userInput: string): boolean {
+  const trimmed = userInput.trim().toLowerCase();
+  if (isSimpleAffirmative(userInput)) return true;
+  if (trimmed.length === 0 || trimmed.includes("?")) return false;
+
+  const lateChangeSignals = [
+    " but ", "actually", "however", "wait", "hmm",
+    "except", "instead", "rather", "one more", "one thing",
+    "add ", "remove ", "change ", "update ", "make ", "set ",
+    "include ", "delete ", "fix ", "revise ", "rewrite ",
+  ];
+  if (lateChangeSignals.some((signal) => trimmed.includes(signal))) return false;
+
+  const finalAffirmationPattern =
+    /(?:^|[\s.!])(?:yes|yeah|yep|yup|proceed|continue|go ahead|do it|draft it|draft those|draft them|write it|write those|write them|ship it|let's go|let's do it|confirmed|confirm|looks good|sounds good|sounds right|that works|that's right|exactly|correct|agreed|approved)\s*[.!]*$/u;
+  return finalAffirmationPattern.test(trimmed);
 }
 
 function hasCompletionIntent(response: string): boolean {

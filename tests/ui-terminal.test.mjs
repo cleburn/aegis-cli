@@ -59,12 +59,28 @@ test("short streaming response keeps full dynamic render", () => {
   assert.deepEqual(lines, [{ text: message, showLabel: true }]);
 });
 
+test("short multi-line streaming response keeps full dynamic render", () => {
+  const message = Array.from({ length: 4 }, (_, index) => `line-${index + 1}`).join("\n");
+  const lines = getStreamingResponseLines(message, 80, 24);
+
+  assert.deepEqual(lines.map((line) => line.text), ["line-1", "line-2", "line-3", "line-4"]);
+  assert.equal(lines[0].showLabel, true);
+  assert.ok(lines.slice(1).every((line) => line.showLabel === false));
+});
+
 test("long streaming response is bounded to the live tail", () => {
   const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
-  const lines = getStreamingResponseLines(message, 80, 10);
+  const lines = getStreamingResponseLines(message, 80, 14);
 
-  assert.equal(getStreamingLineLimit(10), 3);
-  assert.deepEqual(lines.map((line) => line.text), ["line-10", "line-11", "line-12"]);
+  assert.equal(getStreamingLineLimit(14), 6);
+  assert.deepEqual(lines.map((line) => line.text), [
+    "line-7",
+    "line-8",
+    "line-9",
+    "line-10",
+    "line-11",
+    "line-12",
+  ]);
   assert.equal(lines[0].showLabel, true);
   assert.ok(lines.slice(1).every((line) => line.showLabel === false));
 });
@@ -74,7 +90,25 @@ test("streaming response recalculates its window for terminal resize", () => {
   const compact = getStreamingResponseLines(message, 80, 10);
   const expanded = getStreamingResponseLines(message, 80, 20);
 
-  assert.equal(compact.length, 3);
-  assert.equal(expanded.length, 12);
+  assert.equal(compact.length, 2);
+  assert.equal(expanded.length, 6);
   assert.equal(expanded[0].showLabel, true);
+});
+
+test("long streaming response never renders the static first line in the live tail", () => {
+  const message = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
+  const liveTail = getStreamingResponseLines(message, 80, 24);
+  const finalStatic = wrapConversationTurn(message, 80);
+
+  assert.equal(getStreamingLineLimit(24), 6);
+  assert.deepEqual(liveTail.map((line) => line.text), [
+    "line-7",
+    "line-8",
+    "line-9",
+    "line-10",
+    "line-11",
+    "line-12",
+  ]);
+  assert.equal(finalStatic[0].text, "line-1");
+  assert.ok(liveTail.every((line) => line.text !== finalStatic[0].text));
 });

@@ -45,6 +45,7 @@ const GUTTER_WIDTH = 11;
 const MIN_WIDTH_FOR_ASSEMBLY = 54;
 const HEADER_RULE_WIDTH = 73;
 const STREAMING_VIEWPORT_RESERVE_ROWS = 8;
+const STREAMING_MAX_LIVE_TAIL_LINES = 6;
 
 // ── Brand Constants ────────────────────────────────────────────────
 const AEGIS_TAGLINE = "Policy at the root. Enforcement at runtime. Accountability on every action.";
@@ -409,13 +410,13 @@ export function getStreamingResponseLines(
   terminalRows: number
 ): ConversationWrapLine[] {
   const lines = wrapConversationTurn(text, width);
-  // Ink can clear dynamic output reliably while it stays within the
-  // managed viewport. If streaming renders more lines than the
-  // terminal can hold, older lines scroll into permanent scrollback;
-  // when endAegisResponse appends the full static turn, those stale
-  // streamed lines look like duplicated content. Keep only a live
-  // tail in the dynamic region; the full message is still committed
-  // exactly once to static history when streaming ends.
+  // Ink can clear dynamic output reliably while it stays small. If
+  // streaming is allowed to grow toward the terminal height, early
+  // lines can scroll into permanent scrollback before the bounded tail
+  // applies; when endAegisResponse appends the full static turn, those
+  // stale streamed lines look like duplicated content. Keep only a
+  // small live tail from the first frames; the full message is still
+  // committed exactly once to static history when streaming ends.
   const limit = getStreamingLineLimit(terminalRows);
   if (lines.length <= limit) return lines;
 
@@ -426,7 +427,13 @@ export function getStreamingResponseLines(
 export function getStreamingLineLimit(terminalRows: number): number {
   // Reserve rows for the prompt, transient status/menu regions, and
   // Ink's spacing so streaming stays inside the clearable viewport.
-  return Math.max(3, terminalRows - STREAMING_VIEWPORT_RESERVE_ROWS);
+  return Math.max(
+    1,
+    Math.min(
+      STREAMING_MAX_LIVE_TAIL_LINES,
+      terminalRows - STREAMING_VIEWPORT_RESERVE_ROWS
+    )
+  );
 }
 
 // ── Input Prompt Component ─────────────────────────────────────────
